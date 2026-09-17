@@ -1,0 +1,667 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  Plus,
+  Search,
+  CalendarDays,
+  ChevronRight,
+  Package,
+  Clock3,
+  FileWarning,
+  CheckCircle2,
+  ChevronDown,
+} from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { useDispatch, useSelector } from "react-redux";
+import { selectSelectedWarehouse } from "../features/warehouse/warehouseSlice";
+import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
+import {
+  fetchInwardList,
+  fetchInwardHistory,
+  uploadInwardDocument,
+  selectInwardList,
+  selectInwardListStatus,
+  selectInwardListError,
+  selectInwardHistory,
+  selectInwardHistoryStatus,
+} from "../features/inward/inwardSlice";
+import { formatGrn } from "../features/inward/inwardHelpers";
+import HistoryPanel from "../features/shared/HistoryPanel";
+
+const filters = ["All types", "New Stock", "Service Stock", "Returns"];
+
+// -------------------------------------------------
+// Date range helpers (local calendar filter)
+// -------------------------------------------------
+
+// yyyy-mm-dd in LOCAL time (avoids the UTC day-shift
+// you get from toISOString() near midnight).
+function toDateInputValue(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getPresetRange(preset) {
+  const to = new Date();
+
+  if (preset === "today") {
+    return { from: toDateInputValue(to), to: toDateInputValue(to) };
+  }
+
+  if (preset === "7d") {
+    const from = new Date();
+    from.setDate(from.getDate() - 6);
+    return { from: toDateInputValue(from), to: toDateInputValue(to) };
+  }
+
+  if (preset === "30d") {
+    const from = new Date();
+    from.setDate(from.getDate() - 29);
+    return { from: toDateInputValue(from), to: toDateInputValue(to) };
+  }
+
+  // "all"
+  return { from: "", to: "" };
+}
+
+function formatShortDate(iso) {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+function formatDateRangeLabel({ preset, from, to }) {
+  if (preset === "all") return "All time";
+  if (preset === "today") return "Today";
+  if (preset === "7d") return "Last 7 days";
+  if (preset === "30d") return "Last 30 days";
+
+  if (!from && !to) return "Select dates";
+  if (from === to) return formatShortDate(from);
+  return `${formatShortDate(from)} \u2013 ${formatShortDate(to)}`;
+}
+
+function StatusBadge({ status, statusType, pendingDocuments = 0 }) {
+  const styles = {
+    complete: "bg-green-100 text-green-700",
+    pending: "bg-amber-100 text-amber-700",
+    missing: "bg-red-100 text-red-600",
+  };
+
+  const label =
+    statusType === "pending" && pendingDocuments > 0
+      ? `${status} (${pendingDocuments} ${pendingDocuments === 1 ? "doc" : "docs"})`
+      : status;
+
+  return (
+    <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ${styles[statusType] || styles.complete}`}>
+      {label}
+    </span>
+  );
+}
+
+const DATE_PRESETS = [
+  { value: "today", label: "Today" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+  { value: "all", label: "All time" },
+];
+
+// Renders its trigger button INLINE (so it drops into the
+// existing filter row with zero layout changes), but portals
+// the dropdown panel to document.body and positions it with
+// `position: fixed` from the button's own bounding rect, clamped
+// to the viewport width so it never gets cut off on small screens.
+function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+  const [draftFrom, setDraftFrom] = useState(from);
+  const [draftTo, setDraftTo] = useState(to);
+  const buttonRef = useRef(null);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    setDraftFrom(from);
+    setDraftTo(to);
+  }, [from, to]);
+
+  const PANEL_WIDTH = 256; // matches w-64
+  const VIEWPORT_MARGIN = 8;
+
+  const openPanel = () => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) {
+      const maxLeft = window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN;
+      const left = Math.max(VIEWPORT_MARGIN, Math.min(rect.left, maxLeft));
+      setCoords({ top: rect.bottom + 8, left });
+    }
+    setOpen(true);
+  };
+
+  // Close on outside click, and reposition/close on scroll or
+  // resize so the panel never drifts away from the button.
+  useEffect(() => {
+    if (!open) return undefined;
+
+    function handleClickOutside(event) {
+      if (
+        panelRef.current &&
+        !panelRef.current.contains(event.target) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    function handleClose() {
+      setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("scroll", handleClose, true);
+    window.addEventListener("resize", handleClose);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("scroll", handleClose, true);
+      window.removeEventListener("resize", handleClose);
+    };
+  }, [open]);
+
+  const handlePreset = (value) => {
+    onPresetSelect(value);
+    setOpen(false);
+  };
+
+  const handleApply = () => {
+    if (!draftFrom || !draftTo) return;
+    onCustomApply(draftFrom, draftTo);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openPanel())}
+        className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs ${
+          open || preset === "custom"
+            ? "border-blue-300 bg-blue-50 text-blue-700"
+            : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+        }`}
+      >
+        <CalendarDays size={13} className="shrink-0" />
+        {formatDateRangeLabel({ preset, from, to })}
+        <ChevronDown size={12} className={`shrink-0 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open &&
+        createPortal(
+          <div
+            ref={panelRef}
+            style={{ position: "fixed", top: coords.top, left: coords.left }}
+            className="z-50 w-64 rounded-xl border border-gray-200 bg-white p-3 shadow-lg"
+          >
+            <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              Quick select
+            </p>
+
+            <div className="mb-3 flex flex-col gap-1">
+              {DATE_PRESETS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => handlePreset(item.value)}
+                  className={`rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition ${
+                    preset === item.value
+                      ? "bg-blue-50 text-blue-700"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              Custom range
+            </p>
+
+            <div className="flex items-center gap-2 px-1">
+              <div className="flex-1">
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">From</label>
+                <input
+                  type="date"
+                  value={draftFrom}
+                  max={draftTo || undefined}
+                  onChange={(e) => setDraftFrom(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">To</label>
+                <input
+                  type="date"
+                  value={draftTo}
+                  min={draftFrom || undefined}
+                  onChange={(e) => setDraftTo(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-2 py-1.5 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={!draftFrom || !draftTo}
+              className="mt-3 w-full rounded-lg bg-[#185FA5] py-1.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Apply
+            </button>
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
+export default function Inward() {
+  const selectedWarehouse = useSelector(selectSelectedWarehouse);
+  const currentUser = (() => {
+    try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
+  })();
+  const warehousePermissions = getWarehousePermissions(currentUser, selectedWarehouse);
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+
+  const rawList = useSelector(selectInwardList);
+  const listStatus = useSelector(selectInwardListStatus);
+  const listError = useSelector(selectInwardListError);
+  const history = useSelector(selectInwardHistory);
+  const historyStatus = useSelector(selectInwardHistoryStatus);
+  const loading = listStatus === "loading";
+
+  const [search, setSearch] = useState("");
+  const [activeFilter, setActiveFilter] = useState("All types");
+  const [showPendingOnly, setShowPendingOnly] = useState(false);
+
+  // Date range filter - defaults to the last 7 days.
+  const [datePreset, setDatePreset] = useState("7d");
+  const [dateRange, setDateRange] = useState(() => getPresetRange("7d"));
+
+  const handleDatePresetSelect = (preset) => {
+    setDatePreset(preset);
+    setDateRange(getPresetRange(preset));
+  };
+
+  const handleDateCustomApply = (from, to) => {
+    setDatePreset("custom");
+    setDateRange({ from, to });
+  };
+
+  // Warehouse managers see only the warehouse they've switched to in
+  // the navbar. Admins are not scoped to a single warehouse, so they
+  // keep seeing everything within their existing access (company /
+  // all companies).
+  const scopedWarehouseId =
+    currentUser?.role === "WAREHOUSE_MANAGER" ? selectedWarehouse?.id : undefined;
+
+  useEffect(() => {
+    dispatch(fetchInwardList({ warehouseId: scopedWarehouseId }));
+    dispatch(fetchInwardHistory({ warehouseId: scopedWarehouseId }));
+  }, [dispatch, scopedWarehouseId]);
+
+  // Derived/formatted data stays in the component (or could
+  // be a reselect selector) - the store just holds raw API data.
+  const inwardData = useMemo(() => rawList.map(formatGrn), [rawList]);
+
+  const filteredData = inwardData.filter((item) => {
+    const searchText = search.toLowerCase().trim();
+
+    const searchMatch =
+      !searchText ||
+      String(item.grn).toLowerCase().includes(searchText) ||
+      String(item.party).toLowerCase().includes(searchText) ||
+      String(item.type).toLowerCase().includes(searchText) ||
+      String(item.refDocNumber || "").toLowerCase().includes(searchText) ||
+      String(item.ewayBillNumber || "").toLowerCase().includes(searchText);
+
+    let typeMatch = true;
+    if (activeFilter === "New Stock") typeMatch = item.type.includes("New Stock");
+    if (activeFilter === "Service Stock") typeMatch = item.type.includes("Service Stock");
+    if (activeFilter === "Returns") typeMatch = item.type.includes("Return");
+
+    const pendingMatch = showPendingOnly ? item.statusType !== "complete" : true;
+
+    let dateMatch = true;
+    if (datePreset !== "all") {
+      if (!item.createdAt) {
+        dateMatch = false;
+      } else {
+        const created = new Date(item.createdAt);
+
+        if (Number.isNaN(created.getTime())) {
+          dateMatch = false;
+        } else {
+          if (dateRange.from) {
+            const fromBoundary = new Date(`${dateRange.from}T00:00:00`);
+            if (created < fromBoundary) dateMatch = false;
+          }
+          if (dateMatch && dateRange.to) {
+            const toBoundary = new Date(`${dateRange.to}T23:59:59.999`);
+            if (created > toBoundary) dateMatch = false;
+          }
+        }
+      }
+    }
+
+    return searchMatch && typeMatch && pendingMatch && dateMatch;
+  });
+
+  const groupedData = filteredData.reduce((groups, item) => {
+    if (!groups[item.date]) groups[item.date] = [];
+    groups[item.date].push(item);
+    return groups;
+  }, {});
+
+  const totalEntries = inwardData.length;
+  const todaysInward = inwardData.filter((item) => item.date === "Today").length;
+  const documentsPending = inwardData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
+  const completed = inwardData.filter((item) => item.statusType === "complete").length;
+
+  const openInward = (item) => {
+    if (!item.id) {
+      alert("GRN ID is missing");
+      return;
+    }
+    navigate(`/inward/${item.id}`);
+  };
+  const handleListDocumentUpload = (event, item) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !item?.id) return;
+    const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(file.type)) return alert("Only PDF, JPG, PNG and WEBP files are allowed.");
+    if (file.size > 10 * 1024 * 1024) return alert("Maximum file size is 10 MB.");
+    const existingCount = Array.isArray(item.documents) ? item.documents.length : 0;
+    const category = existingCount === 0 ? "Vendor invoice #1" : existingCount === 1 ? "E-way bill #1" : existingCount === 2 ? "Unloading sign-off sheet #1" : `Other document #${existingCount - 2}`;
+    dispatch(uploadInwardDocument({ grnId: item.id, file, docCategory: category })).then((result) => {
+      if (uploadInwardDocument.fulfilled.match(result)) { alert("Document uploaded successfully."); dispatch(fetchInwardList({ warehouseId: scopedWarehouseId })); dispatch(fetchInwardHistory({ warehouseId: scopedWarehouseId })); }
+      else alert(result.payload?.message || "Upload failed.");
+    });
+  };
+
+
+  return (
+    <div className="min-h-screen bg-[#F1EFE8] overflow-x-hidden">
+      <main className="mx-auto max-w-[1200px] px-3 py-4 pb-6 sm:px-6 sm:py-5 lg:px-8">
+        <div className="mb-4 flex items-center justify-between sm:mb-5">
+          <div>
+            <h1 className="text-lg font-bold text-gray-900 sm:text-2xl">Inward entries</h1>
+            <p className="mt-0.5 text-[11px] text-gray-500 sm:mt-1 sm:text-sm">View and manage all incoming stock</p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <HistoryPanel entries={history} status={historyStatus} />
+
+            {warehousePermissions.canInward ? (
+              <Link
+                to="/inward/create"
+                className="flex items-center gap-1 rounded-lg bg-[#185FA5] px-2.5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#124c88] sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"
+              >
+                <Plus size={16} />
+                <span className="hidden sm:inline">New inward</span>
+                <span className="sm:hidden">New</span>
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title="You do not have inward access for the selected warehouse"
+                className="flex cursor-not-allowed items-center gap-1 rounded-lg bg-gray-300 px-2.5 py-2 text-xs font-semibold text-gray-500 sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"
+              >
+                <Plus size={16} />
+                <span className="hidden sm:inline">New inward</span>
+                <span className="sm:hidden">New</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:grid-cols-4 sm:gap-3">
+          <SummaryCard title="Total entries" value={loading ? "—" : totalEntries} icon={Package} />
+          <SummaryCard title="Today's inward" value={loading ? "—" : todaysInward} icon={Clock3} />
+          <SummaryCard title="Documents pending" value={loading ? "—" : documentsPending} icon={FileWarning} danger />
+          <SummaryCard title="Completed" value={loading ? "—" : completed} icon={CheckCircle2} />
+        </div>
+
+        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-2.5 sm:mb-5 sm:p-4">
+          <div className="relative">
+            <Search size={16} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search GRN, invoice, supplier or company"
+              className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-8 pr-3 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 sm:py-2.5 sm:pl-9 sm:text-sm"
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+            <DateRangeFilter
+              preset={datePreset}
+              from={dateRange.from}
+              to={dateRange.to}
+              onPresetSelect={handleDatePresetSelect}
+              onCustomApply={handleDateCustomApply}
+            />
+
+            {filters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setActiveFilter(filter)}
+                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
+                  activeFilter === filter ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {filter}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              onClick={() => setShowPendingOnly(!showPendingOnly)}
+              className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
+                showPendingOnly ? "border-red-200 bg-red-50 text-red-600" : "border-gray-300 bg-white text-gray-700"
+              }`}
+            >
+              Pending docs
+            </button>
+          </div>
+        </div>
+
+        {loading && (
+          <div className="rounded-2xl border border-gray-200 bg-white px-5 py-10 text-center">
+            <p className="text-sm text-gray-500">Loading inward entries...</p>
+          </div>
+        )}
+
+        {!loading && listError && (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+            <p className="text-sm font-medium text-red-600">{listError}</p>
+            <button
+              type="button"
+              onClick={() => dispatch(fetchInwardList({ warehouseId: scopedWarehouseId }))}
+              className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {!loading && !listError && (
+          <div className="hidden overflow-hidden rounded-2xl border border-gray-200 bg-white md:block">
+            <div className="border-b border-gray-200 px-5 py-4">
+              <h2 className="text-sm font-semibold text-gray-900">Inward history</h2>
+              <p className="mt-0.5 text-xs text-gray-500">{filteredData.length} entries found</p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[850px] text-left">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">GRN</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Inward type</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Company</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Supplier / Customer</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Quantity</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Date & time</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Status</th>
+                    <th className="px-5 py-3"></th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-gray-100">
+                  {filteredData.map((item) => (
+                    <tr key={item.id} onClick={() => openInward(item)} className="cursor-pointer transition hover:bg-gray-50">
+                      <td className="px-5 py-4">
+                        <p className="text-sm font-semibold text-gray-900">{item.grn}</p>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="text-xs text-gray-700">{item.type}</span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="text-xs font-medium text-gray-800">{item.companyName || "-"}</span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="text-xs font-medium text-gray-800">{item.party}</span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="text-sm font-semibold text-gray-800">{item.quantity}</span>
+                        <span className="ml-1 text-[11px] text-gray-400">pcs</span>
+                      </td>
+                      <td className="px-5 py-4">
+                        <p className="text-xs text-gray-700">{item.date}</p>
+                        <p className="text-[11px] text-gray-400">{item.time}</p>
+                      </td>
+                      <td className="px-5 py-4">
+                        <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {item.statusType !== "complete" && (
+                            <label onClick={(e) => e.stopPropagation()} className="cursor-pointer rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50">Upload
+                              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => handleListDocumentUpload(e, item)} />
+                            </label>
+                          )}
+                          <ChevronRight size={17} className="text-gray-400" />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {filteredData.length === 0 && (
+              <div className="p-10 text-center">
+                <Package size={30} className="mx-auto mb-2 text-gray-300" />
+                <p className="text-sm font-medium text-gray-700">No inward entries found</p>
+                <p className="mt-1 text-xs text-gray-400">Try changing your search or filters.</p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between border-t border-gray-200 px-5 py-3">
+              <p className="text-xs text-gray-500">
+                Showing 1–{filteredData.length} of {inwardData.length}
+              </p>
+              <div className="flex gap-1">
+                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-400">Previous</button>
+                <button type="button" className="rounded-md bg-[#185FA5] px-3 py-1.5 text-xs font-medium text-white">1</button>
+                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">2</button>
+                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">3</button>
+                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">Next</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!loading && !listError && (
+          <div className="space-y-4 md:hidden">
+            {Object.entries(groupedData).map(([date, items]) => (
+              <section key={date}>
+                <div className="mb-1.5 px-1">
+                  <p className="text-[11px] font-medium text-gray-500">{date}</p>
+                </div>
+
+                <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                  {items.map((item, index) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => openInward(item)}
+                      className={`flex w-full items-center gap-2.5 px-3 py-3 text-left transition active:bg-gray-50 ${
+                        index !== items.length - 1 ? "border-b border-gray-200" : ""
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-gray-900">{item.grn}</p>
+                          <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
+                        </div>
+
+                        <p className="mt-1 truncate text-xs text-gray-700">
+                          {item.companyName || "-"} · {item.type} · {item.party}
+                        </p>
+
+                        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-400">
+                          <span>{item.time}</span>
+                          <span>·</span>
+                          <span>{item.quantity} pcs</span>
+                          {item.serials > 0 && (
+                            <>
+                              <span>·</span>
+                              <span>{item.serials} serials</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <ChevronRight size={17} className="shrink-0 text-gray-400" />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+
+            {filteredData.length === 0 && (
+              <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+                <Package size={30} className="mx-auto mb-2 text-gray-300" />
+                <p className="text-sm font-medium text-gray-700">No inward entries found</p>
+                <p className="mt-1 text-xs text-gray-400">Try changing your search or filters.</p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function SummaryCard({ title, value, icon: Icon, danger = false }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-2.5 sm:p-4">
+      <div className="flex items-center justify-between gap-1">
+        <p className="truncate text-[10px] font-medium text-gray-500 sm:text-xs">{title}</p>
+        <Icon size={15} className={`shrink-0 ${danger ? "text-red-500" : "text-blue-500"}`} />
+      </div>
+      <p className={`mt-1.5 text-lg font-bold sm:mt-2 sm:text-xl ${danger ? "text-red-600" : "text-gray-900"}`}>{value}</p>
+    </div>
+  );
+}

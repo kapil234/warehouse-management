@@ -1,0 +1,31 @@
+import { z } from 'zod';
+
+export const ROLES = ['SUPER_ADMIN', 'WAREHOUSE_MANAGER'];
+
+export const signupSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().email('Enter a valid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  role: z.enum(ROLES),
+  companyId: z.string().uuid().optional(),
+  warehouseAccess: z
+    .array(
+      z.object({
+        warehouseId: z.string().uuid(),
+        canInward: z.boolean().optional(),
+        canOutward: z.boolean().optional(),
+        canManageDocuments: z.boolean().optional(),
+      })
+    )
+    .optional(),
+});
+
+export const loginSchema = z.object({
+  email: z.string().email('Enter a valid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+export const updateRoleSchema = z.object({
+  role: z.enum(ROLES),
+  companyId: z.string().uuid().optional(),
+});
