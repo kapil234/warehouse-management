@@ -49,16 +49,14 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus) 
   doc.table({
     columns: [
       { header: "#", width: 30 },
-      { header: "Category", width: 110 },
-      { header: "Company", width: 110 },
-      { header: "SKU / Model", width: 140 },
+      { header: "Category", width: 150 },
+      { header: "SKU / Model", width: 190 },
       { header: "Qty", width: 65 },
       { header: "UOM", width: 80 },
     ],
     rows: items.map((item, index) => [
       String(index + 1),
       item.category || "-",
-      item.companyName || "-",
       item.sku || "-",
       String(item.quantity || 0),
       item.uom || "-",

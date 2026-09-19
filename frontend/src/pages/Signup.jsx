@@ -5,6 +5,7 @@ import { ArrowLeft, Check, Eye, EyeOff, Loader2, Package, UserPlus } from "lucid
 import { signupUser, createUser, fetchMe, selectAuthStatus, selectAuthError } from "../features/auth/authSlice";
 import { fetchWarehouses, selectWarehouses } from "../features/warehouse/warehouseSlice";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
+import CompanyMultiSelect from "../components/CompanyMultiSelect";
 
 const ROLES = [
   { value: "SUPER_ADMIN", label: "Super Admin" },
@@ -33,7 +34,8 @@ export default function Signup() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState(queryCompanyId ? "WAREHOUSE_MANAGER" : "SUPER_ADMIN");
-  const [companyId, setCompanyId] = useState(queryCompanyId);
+  // A warehouse manager can belong to several companies.
+  const [companyIds, setCompanyIds] = useState(queryCompanyId ? [queryCompanyId] : []);
   const [warehouseAccess, setWarehouseAccess] = useState({});
   const [errors, setErrors] = useState({});
 
@@ -45,12 +47,51 @@ export default function Signup() {
     return ROLES.filter((r) => r.value === "SUPER_ADMIN");
   }, [isAddingForCompany, isSuperAdmin]);
 
+  const wantsWarehouses = canLoadWarehouses && role === "WAREHOUSE_MANAGER";
+
   useEffect(() => {
     if (isSuperAdmin) dispatch(fetchCompanies());
-    if (canLoadWarehouses && companyId && role === "WAREHOUSE_MANAGER") {
-      dispatch(fetchWarehouses({ companyId }));
-    }
-  }, [dispatch, canLoadWarehouses, companyId, role, isSuperAdmin]);
+  }, [dispatch, isSuperAdmin]);
+
+  // One request for every warehouse; they're grouped by the selected
+  // companies locally, so ticking another company doesn't refetch.
+  useEffect(() => {
+    if (wantsWarehouses) dispatch(fetchWarehouses({}));
+  }, [dispatch, wantsWarehouses]);
+
+  const selectableCompanies = useMemo(
+    () => companies.filter((c) => c.status !== "Inactive"),
+    [companies]
+  );
+
+  const warehouseCompanyId = (w) => w.companyId || w.company?.id;
+
+  const warehouseGroups = useMemo(
+    () =>
+      companyIds.map((id) => ({
+        id,
+        name:
+          companies.find((c) => c.id === id)?.name ||
+          (id === queryCompanyId ? queryCompanyName : "Company"),
+        warehouses: warehouses.filter((w) => warehouseCompanyId(w) === id),
+      })),
+    [companyIds, companies, warehouses, queryCompanyId, queryCompanyName]
+  );
+
+  // Un-ticking a company also drops any warehouse access chosen under it.
+  const handleCompaniesChange = (next) => {
+    setCompanyIds(next);
+    setWarehouseAccess((prev) => {
+      const kept = {};
+      Object.entries(prev).forEach(([warehouseId, permissions]) => {
+        const warehouse = warehouses.find((w) => w.id === warehouseId);
+        if (warehouse && next.includes(warehouseCompanyId(warehouse))) {
+          kept[warehouseId] = permissions;
+        }
+      });
+      return kept;
+    });
+  };
 
   useEffect(() => {
     if (role !== "WAREHOUSE_MANAGER") setWarehouseAccess({});
@@ -84,7 +125,7 @@ export default function Signup() {
     if (password.length < 8) next.password = "Password must be at least 8 characters";
     if (password !== confirmPassword) next.confirmPassword = "Passwords do not match";
     if (!role) next.role = "Please select a role";
-    if (role !== "SUPER_ADMIN" && !companyId.trim()) next.companyId = "Company is required for this role";
+    if (role !== "SUPER_ADMIN" && companyIds.length === 0) next.companyId = "Select at least one company";
 
     if (Object.keys(next).length) {
       setErrors(next);
@@ -103,7 +144,7 @@ export default function Signup() {
       email: email.trim().toLowerCase(),
       password,
       role,
-      ...(role !== "SUPER_ADMIN" ? { companyId: companyId.trim() } : {}),
+      ...(role !== "SUPER_ADMIN" ? { companyIds } : {}),
       ...(role === "WAREHOUSE_MANAGER" && access.length ? { warehouseAccess: access } : {}),
     };
 
@@ -126,7 +167,7 @@ export default function Signup() {
         // and never to the login page.
         if (isAddingForCompany) {
           navigate(
-            `/allusers?companyId=${encodeURIComponent(companyId)}&companyName=${encodeURIComponent(queryCompanyName)}`,
+            `/allusers?companyId=${encodeURIComponent(queryCompanyId)}&companyName=${encodeURIComponent(queryCompanyName)}`,
             { replace: true }
           );
         } else {
@@ -150,7 +191,7 @@ export default function Signup() {
 
         <form onSubmit={submit} className="p-6 space-y-5">
           {serverError && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{serverError}</div>}
-          {isAddingForCompany && <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">This user will be created inside the selected company. Warehouse access can be granted during signup.</div>}
+          {isAddingForCompany && <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">This user will be added to {queryCompanyName}. You can also add them to other companies below, and grant warehouse access during signup.</div>}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Full name" value={name} onChange={setName} error={errors.name} placeholder="Rahul Sharma" />
@@ -167,43 +208,43 @@ export default function Signup() {
             {errors.role && <p className="mt-1 text-xs text-red-600">{errors.role}</p>}
           </label>
 
-          {role !== "SUPER_ADMIN" && (
-            <label className="block">
-              <span className="block text-sm font-medium text-gray-600 mb-1.5">Company</span>
-              <select
-                value={companyId}
-                onChange={(e) => setCompanyId(e.target.value)}
-                disabled={isAddingForCompany}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-              >
-                <option value="">Select company</option>
-                {companies.filter((c) => c.status !== "Inactive").map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-              {errors.companyId && <p className="mt-1 text-xs text-red-600">{errors.companyId}</p>}
-            </label>
+          {role !== "SUPER_ADMIN" && isSuperAdmin && (
+            <CompanyMultiSelect
+              companies={selectableCompanies}
+              value={companyIds}
+              onChange={handleCompaniesChange}
+              lockedIds={isAddingForCompany ? [queryCompanyId] : []}
+              error={errors.companyId}
+            />
           )}
 
           {role === "WAREHOUSE_MANAGER" && (
             <div className="border-t pt-5">
               <div className="flex items-center justify-between mb-3"><div><h2 className="text-sm font-semibold text-gray-900">Warehouse access</h2><p className="text-xs text-gray-500 mt-0.5">Only warehouses granted here can be used by this manager.</p></div><span className="text-xs text-gray-400">Optional</span></div>
               {!canLoadWarehouses && <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">For a public signup, an admin must grant warehouse access after the account is created.</div>}
-              {canLoadWarehouses && companyId && warehouses.length === 0 && <p className="text-xs text-gray-500">No warehouses found for this company.</p>}
-              <div className="space-y-2">
-                {canLoadWarehouses && warehouses.map((warehouse) => {
-                  const selected = Boolean(warehouseAccess[warehouse.id]);
-                  return <div key={warehouse.id} className="rounded-xl border border-gray-200 p-3">
-                    <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={selected} onChange={() => toggleWarehouse(warehouse.id)} className="h-4 w-4" /><span className="text-sm font-medium text-gray-800">{warehouse.name}</span><span className="text-xs text-gray-500">{warehouse.code} • {warehouse.city}</span></label>
-                    {selected && <div className="mt-3 ml-7 flex flex-wrap gap-3">{[["canInward","Inward"],["canOutward","Outward"],["canManageDocuments","Documents"]].map(([key,label]) => <label key={key} className="inline-flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={Boolean(warehouseAccess[warehouse.id]?.[key])} onChange={() => updatePermission(warehouse.id,key)} />{label}</label>)}</div>}
-                  </div>;
-                })}
+              {canLoadWarehouses && companyIds.length === 0 && <p className="text-xs text-gray-500">Select a company above to see its warehouses.</p>}
+              <div className="space-y-4">
+                {canLoadWarehouses && warehouseGroups.map((group) => (
+                  <div key={group.id}>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">{group.name}</p>
+                    {group.warehouses.length === 0 && <p className="text-xs text-gray-500">No warehouses found for this company.</p>}
+                    <div className="space-y-2">
+                      {group.warehouses.map((warehouse) => {
+                        const selected = Boolean(warehouseAccess[warehouse.id]);
+                        return <div key={warehouse.id} className="rounded-xl border border-gray-200 p-3">
+                          <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={selected} onChange={() => toggleWarehouse(warehouse.id)} className="h-4 w-4" /><span className="text-sm font-medium text-gray-800">{warehouse.name}</span><span className="text-xs text-gray-500">{warehouse.code} • {warehouse.city}</span></label>
+                          {selected && <div className="mt-3 ml-7 flex flex-wrap gap-3">{[["canInward","Inward"],["canOutward","Outward"],["canManageDocuments","Documents"]].map(([key,label]) => <label key={key} className="inline-flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={Boolean(warehouseAccess[warehouse.id]?.[key])} onChange={() => updatePermission(warehouse.id,key)} />{label}</label>)}</div>}
+                        </div>;
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
           <div className="flex flex-col-reverse sm:flex-row sm:justify-between gap-3 border-t pt-5">
-            <Link to={isSuperAdmin ? `/allusers${isAddingForCompany ? `?companyId=${encodeURIComponent(companyId)}&companyName=${encodeURIComponent(queryCompanyName)}` : ""}` : (isAddingForCompany ? `/allusers?companyId=${encodeURIComponent(companyId)}&companyName=${encodeURIComponent(queryCompanyName)}` : "/")} className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"><ArrowLeft size={16} /> Cancel</Link>
+            <Link to={isSuperAdmin ? `/allusers${isAddingForCompany ? `?companyId=${encodeURIComponent(queryCompanyId)}&companyName=${encodeURIComponent(queryCompanyName)}` : ""}` : (isAddingForCompany ? `/allusers?companyId=${encodeURIComponent(queryCompanyId)}&companyName=${encodeURIComponent(queryCompanyName)}` : "/")} className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"><ArrowLeft size={16} /> Cancel</Link>
             <button disabled={loading} type="submit" className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"><UserPlus size={16} />{loading ? "Creating..." : isAddingForCompany ? "Create user" : "Create account"}</button>
           </div>
         </form>

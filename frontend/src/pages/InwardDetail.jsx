@@ -54,8 +54,8 @@ function downloadInwardPdf(inward, items, documents) {
   });
   doc.subheading("Items");
   doc.table({
-    columns: [{ header: "#", width: 30 }, { header: "Category", width: 110 }, { header: "Company", width: 110 }, { header: "SKU / Model", width: 140 }, { header: "Qty", width: 65 }, { header: "UOM", width: 80 }],
-    rows: items.map((x, i) => [String(i + 1), x.category || "-", x.companyName || "-", x.sku || "-", String(x.quantity || 0), x.uom || "-"]),
+    columns: [{ header: "#", width: 30 }, { header: "Category", width: 150 }, { header: "SKU / Model", width: 190 }, { header: "Qty", width: 65 }, { header: "UOM", width: 80 }],
+    rows: items.map((x, i) => [String(i + 1), x.category || "-", x.sku || "-", String(x.quantity || 0), x.uom || "-"]),
   });
   doc.subheading("Documents");
   doc.table({
@@ -302,7 +302,6 @@ export default function InwardDetail() {
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Category</th>
-                <th className="py-2 px-1 sm:py-3 sm:px-3">Company</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">SKU</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Qty</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">UOM</th>
@@ -313,7 +312,6 @@ export default function InwardDetail() {
                 <tr key={item.id || index} className="border-b last:border-0">
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.companyName || "-"}</td>
                   <td className="py-2 px-1 truncate font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
@@ -321,7 +319,7 @@ export default function InwardDetail() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="text-center py-8 text-gray-500">
+                  <td colSpan="5" className="text-center py-8 text-gray-500">
                     No items found
                   </td>
                 </tr>

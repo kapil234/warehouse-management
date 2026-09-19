@@ -877,8 +877,10 @@ export default function WarehouseManagement() {
                 {users
                   .filter(
                     (u) =>
-                      u.companyId ===
-                        accessWarehouse.companyId &&
+                      (u.companyIds?.length
+                        ? u.companyIds
+                        : [u.companyId]
+                      ).includes(accessWarehouse.companyId) &&
                       u.role ===
                         "WAREHOUSE_MANAGER",
                   )

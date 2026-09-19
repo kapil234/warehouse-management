@@ -23,6 +23,22 @@ import {
   selectUsersError,
 } from "../features/auth/authSlice";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
+import CompanyMultiSelect from "../components/CompanyMultiSelect";
+
+// Every company a user belongs to. Falls back to the old single-company
+// fields for users loaded before multi-company support.
+const userCompanies = (user) => {
+  if (user?.companies?.length) return user.companies;
+  return user?.company ? [user.company] : [];
+};
+
+const userCompanyIds = (user) => {
+  if (user?.companyIds?.length) return user.companyIds;
+  return user?.companyId ? [user.companyId] : [];
+};
+
+const sameIds = (a, b) =>
+  a.length === b.length && a.every((id) => b.includes(id));
 
 const ROLES = ["SUPER_ADMIN", "WAREHOUSE_MANAGER"];
 const roleLabel = (role) =>
@@ -50,7 +66,7 @@ export default function AllUsers() {
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [role, setRole] = useState("");
-  const [companyForRole, setCompanyForRole] = useState(companyId || "");
+  const [companyIdsForRole, setCompanyIdsForRole] = useState(companyId ? [companyId] : []);
   const [formError, setFormError] = useState("");
 
   useEffect(() => {
@@ -66,8 +82,7 @@ export default function AllUsers() {
         user.name,
         user.email,
         user.role,
-        user.company?.name,
-        user.company?.code,
+        ...userCompanies(user).flatMap((c) => [c.name, c.code]),
       ].some((value) =>
         String(value || "")
           .toLowerCase()
@@ -82,9 +97,17 @@ export default function AllUsers() {
     setEditMode(true);
     setForm({ name: user.name || "", email: user.email || "", password: "" });
     setRole(user.role || "");
-    setCompanyForRole(user.companyId || companyId || "");
+    const ids = userCompanyIds(user);
+    setCompanyIdsForRole(ids.length ? ids : companyId ? [companyId] : []);
     setFormError("");
   };
+
+  // Active companies, plus any inactive company this user already belongs to,
+  // so saving the form can't silently drop it.
+  const editableCompanies = useMemo(() => {
+    const memberOf = new Set(selected ? userCompanyIds(selected) : []);
+    return companies.filter((c) => c.status !== "Inactive" || memberOf.has(c.id));
+  }, [companies, selected]);
 
   const close = () => {
     setSelected(null);
@@ -100,8 +123,8 @@ export default function AllUsers() {
       return setFormError("Enter a valid email address.");
     if (form.password && form.password.length < 8)
       return setFormError("Password must be at least 8 characters.");
-    if (role !== "SUPER_ADMIN" && !companyForRole)
-      return setFormError("Company is required for this role.");
+    if (role !== "SUPER_ADMIN" && companyIdsForRole.length === 0)
+      return setFormError("Select at least one company for this role.");
 
     const profilePayload = {
       id: selected.id,
@@ -115,13 +138,14 @@ export default function AllUsers() {
 
     if (
       role !== selected.role ||
-      (role !== "SUPER_ADMIN" && companyForRole !== selected.companyId)
+      (role !== "SUPER_ADMIN" &&
+        !sameIds(companyIdsForRole, userCompanyIds(selected)))
     ) {
       const roleResult = await dispatch(
         updateUserRole({
           id: selected.id,
           role,
-          companyId: role === "SUPER_ADMIN" ? undefined : companyForRole,
+          companyIds: role === "SUPER_ADMIN" ? undefined : companyIdsForRole,
         }),
       );
       if (updateUserRole.rejected.match(roleResult))
@@ -217,7 +241,7 @@ export default function AllUsers() {
             <tr className="border-b bg-gray-50 text-left text-xs text-gray-500">
               <th className="px-4 py-3">User</th>
               <th className="px-4 py-3">Role</th>
-              <th className="px-4 py-3">Company</th>
+              <th className="px-4 py-3">Companies</th>
               <th className="px-4 py-3">Warehouses</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
@@ -247,13 +271,34 @@ export default function AllUsers() {
                     </span>
                   </td>
                   <td className="px-4 py-4">
-                    <div className="text-gray-800">
-                      {user.company?.name || "Unassigned"}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {user.company?.code ||
-                        (user.companyId ? user.companyId : "-")}
-                    </div>
+                    {userCompanies(user).length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {userCompanies(user)
+                          .slice(0, 2)
+                          .map((c) => (
+                            <span
+                              key={c.id}
+                              title={c.code || ""}
+                              className="max-w-[160px] truncate rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700"
+                            >
+                              {c.name}
+                            </span>
+                          ))}
+                        {userCompanies(user).length > 2 && (
+                          <span
+                            title={userCompanies(user)
+                              .slice(2)
+                              .map((c) => c.name)
+                              .join(", ")}
+                            className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                          >
+                            +{userCompanies(user).length - 2} more
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-gray-800">Unassigned</div>
+                    )}
                   </td>
                   <td className="px-4 py-4">
                     <div className="text-gray-800">
@@ -372,19 +417,11 @@ export default function AllUsers() {
                   </select>
                 </label>
                 {role !== "SUPER_ADMIN" && (
-                  <label className="block">
-                    <span className="block text-sm text-gray-500 mb-1">Company</span>
-                    <select
-                      value={companyForRole}
-                      onChange={(e) => setCompanyForRole(e.target.value)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-sm bg-white"
-                    >
-                      <option value="">Select company</option>
-                      {companies.filter((c) => c.status !== "Inactive").map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <CompanyMultiSelect
+                    companies={editableCompanies}
+                    value={companyIdsForRole}
+                    onChange={setCompanyIdsForRole}
+                  />
                 )}
                 {formError && (
                   <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
@@ -412,8 +449,12 @@ export default function AllUsers() {
                 <div className="grid grid-cols-2 gap-3 mb-5">
                   <Info label="Role" value={roleLabel(selected.role)} />
                   <Info
-                    label="Company"
-                    value={selected.company?.name || "Unassigned"}
+                    label={userCompanies(selected).length > 1 ? "Companies" : "Company"}
+                    value={
+                      userCompanies(selected).length
+                        ? userCompanies(selected).map((c) => c.name).join(", ")
+                        : "Unassigned"
+                    }
                   />
                 </div>
                 <h3 className="text-sm font-semibold text-gray-900 mb-3">

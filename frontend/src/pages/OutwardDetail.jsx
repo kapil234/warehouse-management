@@ -303,7 +303,6 @@ export default function OutwardDetail() {
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Category</th>
-                <th className="py-2 px-1 sm:py-3 sm:px-3">Company</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">SKU</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Qty</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">UOM</th>
@@ -314,7 +313,6 @@ export default function OutwardDetail() {
                 <tr key={item.id || index} className="border-b last:border-0">
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.companyName || "-"}</td>
                   <td className="py-2 px-1 truncate font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
@@ -322,7 +320,7 @@ export default function OutwardDetail() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="text-center py-8 text-gray-500">
+                  <td colSpan="5" className="text-center py-8 text-gray-500">
                     No items found
                   </td>
                 </tr>

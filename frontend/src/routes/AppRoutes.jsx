@@ -1,21 +1,36 @@
+import { Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
+
+// Login stays in the main bundle - it is the first screen most
+// visitors see. Everything else is loaded on demand (see lazyPages.js).
 import Login from "../pages/Login";
-import Signup from "../pages/Signup";
-import Dashboard from "../pages/Dashboard";
-import Reports from "../pages/Reports";
 import AppLayout from "../components/AppLayout";
-import InwardForm from "../pages/InwardForm";
-
-import InwardList from "../pages/InwardList";
-import InwardDetail from "../pages/InwardDetail";
-
 import ProtectedRoute from "../components/ProtectedRoutes";
-import OutwardForm from "../pages/OutwardForm";
-import OutwardList from "../pages/OutwardList";
-import OutwardDetail from "../pages/OutwardDetail";
-import AllUsers from "../pages/AllUsers";
-import WarehouseManagement from "../pages/WarehouseMangement";
-import CompanyManagement from "../pages/CompanyManagement";
+import RouteFallback from "../components/RouteFallback";
+import {
+  Signup,
+  Dashboard,
+  Reports,
+  InwardForm,
+  InwardList,
+  InwardDetail,
+  OutwardForm,
+  OutwardList,
+  OutwardDetail,
+  AllUsers,
+  WarehouseManagement,
+  CompanyManagement,
+  StockLedger,
+  ProductManagement,
+} from "./lazyPages";
+
+// Full-screen flows have no shell around them, so they get their own
+// Suspense boundary + a protected wrapper.
+const fullScreen = (page) => (
+  <ProtectedRoute>
+    <Suspense fallback={<RouteFallback fullScreen />}>{page}</Suspense>
+  </ProtectedRoute>
+);
 
 const router = createBrowserRouter([
   {
@@ -25,14 +40,19 @@ const router = createBrowserRouter([
 
   {
     path: "/signup",
-    element: <Signup />,
+    element: (
+      <Suspense fallback={<RouteFallback fullScreen />}>
+        <Signup />
+      </Suspense>
+    ),
   },
 
   // Pages that live inside the shared Navbar + Sidebar shell.
   // AppLayout derives which tab is active from the URL itself,
   // so switching tabs (or hitting Back after opening a detail
   // page) always lands on the right page instead of resetting
-  // to the dashboard.
+  // to the dashboard. AppLayout also owns the Suspense boundary,
+  // so the Navbar + Sidebar stay on screen while a page chunk loads.
   {
     element: (
       <ProtectedRoute>
@@ -44,68 +64,24 @@ const router = createBrowserRouter([
       { path: "/inward", element: <InwardList /> },
       { path: "/outward", element: <OutwardList /> },
       { path: "/reports", element: <Reports /> },
-      { path: "/allusers", element: <AllUsers/>},
-      {path:"/warehousemanagement",element:<WarehouseManagement/>},
-      { path: "/companies", element: <CompanyManagement /> }
+      { path: "/allusers", element: <AllUsers /> },
+      { path: "/stock-ledger", element: <StockLedger /> },
+      { path: "/warehousemanagement", element: <WarehouseManagement /> },
+      { path: "/companies", element: <CompanyManagement /> },
+      { path: "/products", element: <ProductManagement /> },
     ],
   },
 
   // Full-screen flows (create forms + detail pages) - these have
   // their own header + Back button and intentionally render
   // without the sidebar/navbar shell.
-  {
-    path: "/inward/create",
-    element: (
-      <ProtectedRoute>
-        <InwardForm />
-      </ProtectedRoute>
-    ),
-  },
+  { path: "/inward/create", element: fullScreen(<InwardForm />) },
+  { path: "/inward/:id/edit", element: fullScreen(<InwardForm />) },
+  { path: "/inward/:id", element: fullScreen(<InwardDetail />) },
 
-  {
-    path: "/inward/:id/edit",
-    element: (
-      <ProtectedRoute>
-        <InwardForm />
-      </ProtectedRoute>
-    ),
-  },
-
-  {
-    path: "/inward/:id",
-    element: (
-      <ProtectedRoute>
-        <InwardDetail />
-      </ProtectedRoute>
-    ),
-  },
-
-  {
-    path: "/outward/create",
-    element: (
-      <ProtectedRoute>
-        <OutwardForm />
-      </ProtectedRoute>
-    ),
-  },
-
-  {
-    path: "/outward/:id/edit",
-    element: (
-      <ProtectedRoute>
-        <OutwardForm />
-      </ProtectedRoute>
-    ),
-  },
-
-  {
-    path: "/outward/:id",
-    element: (
-      <ProtectedRoute>
-        <OutwardDetail />
-      </ProtectedRoute>
-    ),
-  },
+  { path: "/outward/create", element: fullScreen(<OutwardForm />) },
+  { path: "/outward/:id/edit", element: fullScreen(<OutwardForm />) },
+  { path: "/outward/:id", element: fullScreen(<OutwardDetail />) },
 ]);
 
 export default router;

@@ -8,16 +8,14 @@ import {
   fetchOutwardById,
   uploadOutwardDocument,
   resetOutwardCreateStatus,
-  fetchOutwardModels,
-  createOutwardModel,
-  fetchOutwardCompanies,
-  createOutwardCompany,
   selectOutwardCreateStatus,
   selectOutwardUploadingDocs,
 } from "../features/outward/outwardSlice";
 import { fetchWarehouses, selectWarehouses, selectSelectedWarehouse, setSelectedWarehouse } from "../features/warehouse/warehouseSlice";
 import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
+import useProducts from "../features/product/useProducts";
+import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 
 const makeId = () => crypto.randomUUID();
 const getDateTimeLocal = () => {
@@ -26,8 +24,7 @@ const getDateTimeLocal = () => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 const newReference = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
-const helperKey = (category, companyName) => `${category}::${companyName || ""}`;
-const newItem = () => ({ id: makeId(), category: "Inverters", companyName: "", sku: "", quantity: "", uom: "Pcs" });
+const newItem = () => ({ id: makeId(), category: "", sku: "", quantity: "", uom: "Pcs" });
 const newDoc = (type = "Invoice", name = "") => ({ id: makeId(), type, name, file: null });
 
 const DEFAULT_DOCS = [
@@ -46,6 +43,7 @@ export default function OutwardForm() {
   const selectedWarehouse = useSelector(selectSelectedWarehouse);
   const companies = useSelector(selectAllCompanies);
   const createStatus = useSelector(selectOutwardCreateStatus);
+  const products = useProducts();
   const uploadingDocs = useSelector(selectOutwardUploadingDocs);
 
   const user = (() => { try { return JSON.parse(localStorage.getItem("user")); } catch { return null; } })();
@@ -56,15 +54,6 @@ export default function OutwardForm() {
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [references, setReferences] = useState([newReference()]);
   const [items, setItems] = useState([newItem()]);
-  // Keyed as `${category}::${companyName}` -> array of model names,
-  // same scoping the inward form uses: nothing shows until an item's
-  // Company is selected.
-  const [models, setModels] = useState({});
-  const [newModelFor, setNewModelFor] = useState(null);
-  const [newModelName, setNewModelName] = useState("");
-  const [companyOptions, setCompanyOptions] = useState([]);
-  const [newCompanyFor, setNewCompanyFor] = useState(null);
-  const [newCompanyName, setNewCompanyName] = useState("");
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [documents, setDocuments] = useState(DEFAULT_DOCS);
@@ -140,7 +129,7 @@ export default function OutwardForm() {
         ? x.referenceDocuments
         : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "", ewayBillNumber: x.ewayBillNumber || "" }];
       setReferences(refs.map((r) => ({ ...newReference(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "", ewayBillNumber: r.ewayBillNumber || "" })));
-      setItems((x.items || []).map((i) => ({ id: makeId(), category: i.category || "Inverters", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
+      setItems((x.items || []).map((i) => ({ id: makeId(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
       setDispatchMode(x.dispatchMode || "By Road");
       setVehicleNumber(x.vehicleNumber || "");
       setRemarks(x.remarks || "");
@@ -159,60 +148,20 @@ export default function OutwardForm() {
     if (warehouseId && !permissions.canOutward && !isEdit) navigate("/outward");
   }, [warehouseId, permissions.canOutward, navigate]);
 
-  useEffect(() => {
-    if (!warehouseId) return;
-    dispatch(fetchOutwardModels(warehouseId)).then((result) => {
-      if (fetchOutwardModels.fulfilled.match(result)) {
-        const grouped = {};
-        for (const model of result.payload || []) {
-          const key = helperKey(model.category, model.companyName);
-          (grouped[key] ||= []).push(model.name || model.sku);
-        }
-        setModels(grouped);
-      }
-    });
-    dispatch(fetchOutwardCompanies(warehouseId)).then((result) => {
-      if (fetchOutwardCompanies.fulfilled.match(result)) {
-        setCompanyOptions((result.payload || []).map((c) => c.name).filter(Boolean));
-      }
-    });
-  }, [dispatch, warehouseId]);
-
   const updateReference = (id, field, value) => setReferences((p) => p.map((r) => r.id === id ? { ...r, [field]: value } : r));
   const addReference = () => setReferences((p) => [...p, newReference()]);
   const removeReference = (id) => setReferences((p) => p.length === 1 ? p : p.filter((r) => r.id !== id));
 
   const updateItem = (id, field, value) => setItems((p) => p.map((i) => {
     if (i.id !== id) return i;
-    if (field === "category" || field === "companyName") return { ...i, [field]: value, sku: "" };
+    // Picking a different category / SKU means a different product, so the
+    // (hidden) company carried over from an older entry no longer applies.
+    if (field === "category") return { ...i, category: value, sku: "", companyName: "" };
+    if (field === "sku") return { ...i, sku: value, companyName: "" };
     return { ...i, [field]: value };
   }));
   const addItem = () => setItems((p) => [...p, newItem()]);
   const removeItem = (id) => setItems((p) => p.length === 1 ? p : p.filter((i) => i.id !== id));
-
-  const addModel = async (item) => {
-    const name = newModelName.trim();
-    if (!name) return alert("Please enter a model name.");
-    const companyName = item?.companyName || "";
-    const result = await dispatch(createOutwardModel({ warehouseId, category: item.category, name, companyName: companyName || undefined }));
-    if (createOutwardModel.fulfilled.match(result)) {
-      const key = helperKey(item.category, companyName);
-      setModels((p) => ({ ...p, [key]: [...(p[key] || []), name] }));
-      updateItem(item.id, "sku", name);
-      setNewModelFor(null); setNewModelName("");
-    } else alert(result.payload?.message || "Unable to add model.");
-  };
-
-  const addCompany = async (itemId) => {
-    const name = newCompanyName.trim();
-    if (!name) { alert("Please enter a company name."); return; }
-    const result = await dispatch(createOutwardCompany({ warehouseId, name }));
-    if (createOutwardCompany.fulfilled.match(result)) {
-      setCompanyOptions((prev) => (prev.includes(name) ? prev : [...prev, name]));
-      updateItem(itemId, "companyName", name);
-      setNewCompanyFor(null); setNewCompanyName("");
-    } else alert(result.payload?.message || "Unable to add company.");
-  };
 
   const updateDocument = (id, patch) => setDocuments((p) => p.map((d) => d.id === id ? { ...d, ...patch } : d));
   const addDocument = (type) => {
@@ -245,7 +194,8 @@ export default function OutwardForm() {
     if (!companyName.trim()) return alert("Please enter company name.");
     if (!refsPayload.length) return alert("Please enter at least one reference document number or E-way bill number.");
     for (const item of items) {
-      if (!item.sku.trim()) return alert("Please select/enter model for every item.");
+      if (!item.category) return alert("Please select a category for every item.");
+      if (!item.sku.trim()) return alert("Please select SKU / model for every item.");
       if (Number(item.quantity) <= 0) return alert("Please enter a valid quantity for every item.");
       if (!item.uom) return alert("Please select UOM for every item.");
     }
@@ -348,40 +298,13 @@ export default function OutwardForm() {
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
             <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-semibold text-gray-900">Item details</h2><button type="button" onClick={addItem} className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700"><Plus size={14} />Add item</button></div>
+            <ItemProductNotice isAdmin={isSuperAdmin} />
             <div className="space-y-4">
               {items.map((item, index) => (
                 <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                   <div className="mb-3 flex items-center justify-between"><span className="text-xs font-medium text-gray-500">Item {index + 1}</span>{items.length > 1 && <button type="button" onClick={() => removeItem(item.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Delete item</button>}</div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-12">
-                    <div className="md:col-span-2"><label className={labelCls}>Category</label><select value={item.category} onChange={(e) => updateItem(item.id, "category", e.target.value)} className={`${inputCls} appearance-none`}><option>Inverters</option><option>Panels</option><option>Cables</option></select></div>
-                    <div className="md:col-span-3">
-                      <label className={labelCls}>Company</label>
-                      <div className="flex gap-2">
-                        <select value={item.companyName} onChange={(e) => updateItem(item.id, "companyName", e.target.value)} className={`${inputCls} min-w-0 appearance-none`}>
-                          <option value="">Select company</option>
-                          {companyOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                        </select>
-                        <button type="button" title="Add company" onClick={() => { setNewCompanyFor(item.id); setNewCompanyName(""); }} className="shrink-0 rounded-lg border border-blue-300 bg-white px-3 text-blue-700 hover:bg-blue-50"><Plus size={16} /></button>
-                      </div>
-                      {newCompanyFor === item.id && (
-                        <div className="mt-2 flex gap-2">
-                          <input autoFocus value={newCompanyName} onChange={(e) => setNewCompanyName(e.target.value)} placeholder="Add company" className={inputCls} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCompany(item.id); } }} />
-                          <button type="button" onClick={() => addCompany(item.id)} className="rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700">Add</button>
-                          <button type="button" onClick={() => { setNewCompanyFor(null); setNewCompanyName(""); }} className="rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-600">Cancel</button>
-                        </div>
-                      )}
-                    </div>
-                    <div className="md:col-span-3">
-                      <label className={labelCls}>SKU / Model</label>
-                      <div className="flex gap-2">
-                        <select value={item.sku} disabled={!item.companyName} onChange={(e) => updateItem(item.id, "sku", e.target.value)} className={`${inputCls} min-w-0 appearance-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400`}>
-                          <option value="">{item.companyName ? "Select model" : "Select company first"}</option>
-                          {(models[helperKey(item.category, item.companyName)] || []).map((m) => <option key={m}>{m}</option>)}
-                        </select>
-                        <button type="button" disabled={!item.companyName} onClick={() => { setNewModelFor(item.id); setNewModelName(""); }} className="rounded-lg border border-blue-300 px-3 text-blue-700 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300"><Plus size={16} /></button>
-                      </div>
-                      {newModelFor === item.id && <div className="mt-2 flex gap-2"><input autoFocus value={newModelName} onChange={(e) => setNewModelName(e.target.value)} placeholder={`Add ${item.category} model`} className={inputCls} /><button type="button" onClick={() => addModel(item)} className="rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white">Add</button><button type="button" onClick={() => setNewModelFor(null)} className="rounded-lg border px-3 text-xs">Cancel</button></div>}
-                    </div>
+                    <ItemProductFields item={item} products={products} onChange={(field, value) => updateItem(item.id, field, value)} inputCls={inputCls} labelCls={labelCls} categoryClass="md:col-span-3" skuClass="md:col-span-5" />
                     <div className="md:col-span-2"><label className={labelCls}>Quantity</label><input type="number" min="1" value={item.quantity} onChange={(e) => updateItem(item.id, "quantity", e.target.value)} placeholder="0" className={inputCls} /></div>
                     <div className="md:col-span-2"><label className={labelCls}>UOM</label><select value={item.uom} onChange={(e) => updateItem(item.id, "uom", e.target.value)} className={`${inputCls} appearance-none`}><option>Pcs</option><option>Meters</option><option>Bundles</option></select></div>
                   </div>

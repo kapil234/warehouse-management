@@ -6,11 +6,13 @@ import {
   LogOut,
   PackageMinus,
   PackagePlus,
+  Package,
   Users,
   Warehouse,
   Settings,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { prefetchRoute } from "../routes/lazyPages";
 
 const BASE_ITEMS = [
   {
@@ -68,6 +70,11 @@ export default function Sidebar({
             label: "Warehouses",
             icon: Warehouse,
           },
+          {
+            key: "products",
+            label: "Product Management",
+            icon: Package,
+          },
         ]
       : [];
 
@@ -95,6 +102,8 @@ export default function Sidebar({
                 <li key={key}>
                   <button
                     onClick={() => onNavigate(key)}
+                    onMouseEnter={() => prefetchRoute(key)}
+                    onFocus={() => prefetchRoute(key)}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${
                       active === key
                         ? "bg-blue-50 text-blue-700"
@@ -132,6 +141,8 @@ export default function Sidebar({
                       <li key={key}>
                         <button
                           onClick={() => onNavigate(key)}
+                          onMouseEnter={() => prefetchRoute(key)}
+                          onFocus={() => prefetchRoute(key)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium ${
                             active === key
                               ? "bg-blue-50 text-blue-700"
@@ -175,6 +186,7 @@ export default function Sidebar({
               <button
                 key={key}
                 onClick={() => onNavigate(key)}
+                onTouchStart={() => prefetchRoute(key)}
                 aria-label={label}
                 className={`flex-1 flex items-center justify-center py-3 ${
                   active === key

@@ -17,12 +17,6 @@ import {
   updateInward,
   fetchInwardById,
   uploadInwardDocument,
-  fetchInwardModels,
-  createInwardModel,
-  fetchInwardCompanies,
-  createInwardCompany,
-  selectInwardModels,
-  selectInwardCompanies,
   resetCreateStatus,
   selectCreateStatus,
   selectUploadingDocs,
@@ -35,6 +29,8 @@ import {
 } from "../features/warehouse/warehouseSlice";
 import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
+import useProducts from "../features/product/useProducts";
+import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 
 /*
  * Inward form:
@@ -43,7 +39,8 @@ import { fetchCompanies, selectAllCompanies } from "../features/company/companyS
  * - Reference documents are repeatable.
  * - Every reference row contains document type, reference number and E-way bill.
  * - Documents section has the three default document types plus custom documents.
- * - Items are repeatable and models can be selected or added manually.
+ * - Items are repeatable. Category and SKU / model are picked from the product
+ *   list that admins manage on the Product Management page.
  */
 
 const DEFAULT_REFERENCE = () => ({
@@ -59,12 +56,9 @@ const DEFAULT_DOCUMENTS = [
   { id: crypto.randomUUID(), type: "Other", name: "Unloading sign-off sheet", file: null },
 ];
 
-const helperKey = (category, companyName) => `${category}::${companyName || ""}`;
-
 const createItem = () => ({
   id: crypto.randomUUID(),
-  category: "Inverters",
-  companyName: "",
+  category: "",
   sku: "",
   quantity: "",
   uom: "Pcs",
@@ -101,8 +95,7 @@ export default function InwardForm() {
   const companies = useSelector(selectAllCompanies);
   const createStatus = useSelector(selectCreateStatus);
   const uploadingDocs = useSelector(selectUploadingDocs);
-  const serverModels = useSelector(selectInwardModels);
-  const serverCompanies = useSelector(selectInwardCompanies);
+  const products = useProducts();
 
   const user = (() => {
     try {
@@ -123,16 +116,6 @@ export default function InwardForm() {
   const [showDocumentMenu, setShowDocumentMenu] = useState(false);
 
   const [items, setItems] = useState([createItem()]);
-  // Keyed as `${category}::${companyName}` -> array of model names.
-  // Models are scoped to a company (brand/manufacturer), so nothing
-  // shows until an item's Company is selected.
-  const [models, setModels] = useState({});
-  const [newModelFor, setNewModelFor] = useState(null);
-  const [newModelName, setNewModelName] = useState("");
-
-  const [companyOptions, setCompanyOptions] = useState([]);
-  const [newCompanyFor, setNewCompanyFor] = useState(null);
-  const [newCompanyName, setNewCompanyName] = useState("");
 
   const [remarks, setRemarks] = useState("");
 
@@ -207,7 +190,7 @@ export default function InwardForm() {
         ? x.referenceDocuments
         : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "", ewayBillNumber: x.ewayBillNumber || "" }];
       setReferenceDocuments(refs.map((r) => ({ ...DEFAULT_REFERENCE(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "", ewayBillNumber: r.ewayBillNumber || "" })));
-      setItems((x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "Inverters", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
+      setItems((x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
       setRemarks(x.remarks || "");
       if (Array.isArray(x.documents) && x.documents.length) {
         setDocuments(x.documents.map((d) => ({ id: d.id, type: d.docCategory || "Other", name: d.docCategory || "Document", file: null, existing: true, fileName: d.fileName || d.fileKey })));
@@ -226,25 +209,6 @@ export default function InwardForm() {
       navigate("/inward");
     }
   }, [navigate, warehouseId, permissions.canInward]);
-
-  useEffect(() => {
-    if (!warehouseId) return;
-    dispatch(fetchInwardModels(warehouseId)).then((result) => {
-      if (fetchInwardModels.fulfilled.match(result)) {
-        const grouped = {};
-        for (const model of result.payload || []) {
-          const key = helperKey(model.category, model.companyName);
-          (grouped[key] ||= []).push(model.name || model.sku);
-        }
-        setModels(grouped);
-      }
-    });
-    dispatch(fetchInwardCompanies(warehouseId)).then((result) => {
-      if (fetchInwardCompanies.fulfilled.match(result)) {
-        setCompanyOptions((result.payload || []).map((c) => c.name).filter(Boolean));
-      }
-    });
-  }, [dispatch, warehouseId]);
 
   const submitting = createStatus === "loading";
   const anyDocUploading = Object.values(uploadingDocs || {}).some(Boolean);
@@ -326,20 +290,19 @@ export default function InwardForm() {
       prev.map((item) => {
         if (item.id !== id) return item;
 
+        // Picking a different category / SKU means a different product, so the
+        // (hidden) company carried over from an older entry no longer applies.
         if (field === "category") {
           return {
             ...item,
             category: value,
             sku: "",
+            companyName: "",
           };
         }
 
-        if (field === "companyName") {
-          return {
-            ...item,
-            companyName: value,
-            sku: "",
-          };
+        if (field === "sku") {
+          return { ...item, sku: value, companyName: "" };
         }
 
         return { ...item, [field]: value };
@@ -356,31 +319,6 @@ export default function InwardForm() {
       if (prev.length === 1) return prev;
       return prev.filter((item) => item.id !== id);
     });
-  };
-
-  const addModel = async (category) => {
-    const name = newModelName.trim();
-    if (!name) { alert("Please enter a model name."); return; }
-    const item = items.find((i) => i.id === newModelFor);
-    const companyName = item?.companyName || "";
-    const result = await dispatch(createInwardModel({ warehouseId, category, name, companyName: companyName || undefined }));
-    if (createInwardModel.fulfilled.match(result)) {
-      const key = helperKey(category, companyName);
-      setModels((prev) => ({ ...prev, [key]: [...(prev[key] || []), name] }));
-      setItems((prev) => prev.map((i) => i.id === newModelFor ? { ...i, sku: name } : i));
-      setNewModelFor(null); setNewModelName("");
-    } else alert(result.payload?.message || "Unable to add model.");
-  };
-
-  const addCompany = async (itemId) => {
-    const name = newCompanyName.trim();
-    if (!name) { alert("Please enter a company name."); return; }
-    const result = await dispatch(createInwardCompany({ warehouseId, name }));
-    if (createInwardCompany.fulfilled.match(result)) {
-      setCompanyOptions((prev) => (prev.includes(name) ? prev : [...prev, name]));
-      updateItem(itemId, "companyName", name);
-      setNewCompanyFor(null); setNewCompanyName("");
-    } else alert(result.payload?.message || "Unable to add company.");
   };
 
   const formatDateForApi = (value) => {
@@ -417,8 +355,13 @@ export default function InwardForm() {
     }
 
     for (const item of items) {
+      if (!item.category) {
+        alert("Please select a category for every item.");
+        return;
+      }
+
       if (!item.sku.trim()) {
-        alert("Please enter/select SKU / model for every item.");
+        alert("Please select SKU / model for every item.");
         return;
       }
 
@@ -770,6 +713,8 @@ export default function InwardForm() {
               </button>
             </div>
 
+            <ItemProductNotice isAdmin={isSuperAdmin} />
+
             <div className="space-y-4">
               {items.map((item, index) => (
                 <div
@@ -794,178 +739,17 @@ export default function InwardForm() {
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-12">
+                    <ItemProductFields
+                      item={item}
+                      products={products}
+                      onChange={(field, value) => updateItem(item.id, field, value)}
+                      inputCls={inputCls}
+                      labelCls={labelCls}
+                      categoryClass="md:col-span-3"
+                      skuClass="md:col-span-5"
+                    />
+
                     <div className="md:col-span-2">
-                      <label className={labelCls}>Category</label>
-                      <div className="relative">
-                        <select
-                          value={item.category}
-                          onChange={(e) =>
-                            updateItem(item.id, "category", e.target.value)
-                          }
-                          className={`${inputCls} appearance-none bg-white`}
-                        >
-                          <option>Inverters</option>
-                          <option>Panels</option>
-                          <option>Cables</option>
-                        </select>
-                        <ChevronDown
-                          size={16}
-                          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="md:col-span-4">
-                      <label className={labelCls}>Company</label>
-                      <div className="flex gap-2">
-                        <div className="relative min-w-0 flex-1">
-                          <select
-                            value={item.companyName}
-                            onChange={(e) =>
-                              updateItem(item.id, "companyName", e.target.value)
-                            }
-                            className={`${inputCls} appearance-none bg-white pr-8`}
-                          >
-                            <option value="">Select company</option>
-                            {companyOptions.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown
-                            size={16}
-                            className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400"
-                          />
-                        </div>
-
-                        <button
-                          type="button"
-                          title="Add company"
-                          onClick={() => {
-                            setNewCompanyFor(item.id);
-                            setNewCompanyName("");
-                          }}
-                          className="shrink-0 rounded-lg border border-blue-300 bg-white px-3 text-blue-700 hover:bg-blue-50"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      </div>
-
-                      {newCompanyFor === item.id && (
-                        <div className="mt-2 flex gap-2">
-                          <input
-                            autoFocus
-                            value={newCompanyName}
-                            onChange={(e) => setNewCompanyName(e.target.value)}
-                            placeholder="Add company"
-                            className={inputCls}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                addCompany(item.id);
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => addCompany(item.id)}
-                            className="rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
-                          >
-                            Add
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNewCompanyFor(null);
-                              setNewCompanyName("");
-                            }}
-                            className="rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="md:col-span-4">
-                      <label className={labelCls}>SKU / Model</label>
-                      <div className="flex gap-2">
-                        <div className="relative min-w-0 flex-1">
-                          <select
-                            value={item.sku}
-                            disabled={!item.companyName}
-                            onChange={(e) =>
-                              updateItem(item.id, "sku", e.target.value)
-                            }
-                            className={`${inputCls} appearance-none bg-white pr-8 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400`}
-                          >
-                            <option value="">
-                              {item.companyName ? "Select model" : "Select company first"}
-                            </option>
-                            {(models[helperKey(item.category, item.companyName)] || []).map((model) => (
-                              <option key={model} value={model}>
-                                {model}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown
-                            size={16}
-                            className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400"
-                          />
-                        </div>
-
-                        <button
-                          type="button"
-                          title="Add model"
-                          disabled={!item.companyName}
-                          onClick={() => {
-                            setNewModelFor(item.id);
-                            setNewModelName("");
-                          }}
-                          className="shrink-0 rounded-lg border border-blue-300 bg-white px-3 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      </div>
-
-                      {newModelFor === item.id && (
-                        <div className="mt-2 flex gap-2">
-                          <input
-                            autoFocus
-                            value={newModelName}
-                            onChange={(e) => setNewModelName(e.target.value)}
-                            placeholder={`Add ${item.category} model`}
-                            className={inputCls}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                addModel(item.category);
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => addModel(item.category)}
-                            className="rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
-                          >
-                            Add
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNewModelFor(null);
-                              setNewModelName("");
-                            }}
-                            className="rounded-lg border border-gray-200 px-3 text-xs font-medium text-gray-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="md:col-span-1">
                       <label className={labelCls}>Quantity</label>
                       <input
                         type="number"
@@ -979,7 +763,7 @@ export default function InwardForm() {
                       />
                     </div>
 
-                    <div className="md:col-span-1">
+                    <div className="md:col-span-2">
                       <label className={labelCls}>UOM</label>
                       <div className="relative">
                         <select

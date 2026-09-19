@@ -101,12 +101,14 @@ export const getAllUsers = createAsyncThunk(
 );
 
 // PATCH /api/users/:id/role
+// `companyIds` replaces the user's whole company list (a user can belong to
+// several companies). Leave it out to keep the companies they already have.
 export const updateUserRole = createAsyncThunk(
   "auth/updateUserRole",
-  async ({ id, role, companyId }, { rejectWithValue }) => {
+  async ({ id, role, companyIds }, { rejectWithValue }) => {
     try {
       const body = { role };
-      if (companyId) body.companyId = companyId;
+      if (Array.isArray(companyIds)) body.companyIds = companyIds;
       const { data } = await apiClient.patch(`/api/users/${id}/role`, body);
       return data;
     } catch (err) {
@@ -250,6 +252,10 @@ const authSlice = createSlice({
         if (!updatedUser?.id) return;
         const index = state.users.findIndex((user) => user.id === updatedUser.id);
         if (index !== -1) state.users[index] = { ...state.users[index], ...updatedUser };
+        if (state.user?.id === updatedUser.id) {
+          state.user = { ...state.user, ...updatedUser };
+          localStorage.setItem("user", JSON.stringify(state.user));
+        }
       })
       .addCase(updateUserRole.rejected, (state, action) => {
         state.usersError = action.payload || "Failed to update user role";

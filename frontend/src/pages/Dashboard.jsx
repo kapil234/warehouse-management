@@ -90,9 +90,10 @@ export default function Dashboard() {
       })
     );
 
-    // Used only as fallback for company name.
-    dispatch(fetchCompanies());
-  }, [dispatch, user?.companyId, scopedWarehouseId]);
+    // Used only as fallback for company name. /api/companies is
+    // Super Admin only, so managers skip the (always-403) request.
+    if (user?.role === "SUPER_ADMIN") dispatch(fetchCompanies());
+  }, [dispatch, user?.companyId, user?.role, scopedWarehouseId]);
 
   // ===================================================
   // COMPANY NAME
@@ -114,6 +115,14 @@ export default function Dashboard() {
   // ===================================================
 
   const companyName = useMemo(() => {
+    // -------------------------------------------------
+    // 0. User belongs to several companies - list them all
+    // -------------------------------------------------
+
+    if (user?.companies?.length > 1) {
+      return user.companies.map((company) => company.name).join(", ");
+    }
+
     // -------------------------------------------------
     // 1. Direct company relation on logged-in user
     // -------------------------------------------------

@@ -29,7 +29,12 @@ model Company {
   createdAt DateTime @default(now())
 
   warehouses Warehouse[]
-  users      User[]
+
+  // Users whose PRIMARY company this is (kept for backward compatibility).
+  users User[]
+
+  // Every user that belongs to this company (a user can have many companies).
+  members UserCompany[]
 }
 
 model Warehouse {
@@ -67,14 +72,31 @@ model User {
   role         Role
   createdAt    DateTime @default(now())
 
+  // Primary company. Always one of the companies in `companies` below.
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
+
+  // All companies this user belongs to.
+  companies UserCompany[]
 
   warehouseAccess WarehouseAccess[]
   grns            Grn[]
   mins            Min[]
   documents       Document[]
   auditLogs       AuditLog[]
+}
+
+// Join table: which companies a user belongs to (many-to-many).
+model UserCompany {
+  userId    String
+  companyId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, companyId])
+  @@index([companyId])
 }
 
 model WarehouseAccess {
@@ -298,4 +320,14 @@ model AuditLog {
   @@index([userId])
   @@index([warehouseId])
   @@index([createdAt])
+}
+model Product {
+  id        String   @id @default(uuid())
+  category  String
+  sku       String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([category, sku])
+  @@index([category])
 }
