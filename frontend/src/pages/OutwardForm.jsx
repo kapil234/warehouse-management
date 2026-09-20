@@ -15,6 +15,7 @@ import { fetchWarehouses, selectWarehouses, selectSelectedWarehouse, setSelected
 import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
 import useProducts from "../features/product/useProducts";
+import useOutwardStock, { stockKey } from "../features/outward/useOutwardStock";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 
 const makeId = () => crypto.randomUUID();
@@ -54,6 +55,8 @@ export default function OutwardForm() {
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [references, setReferences] = useState([newReference()]);
   const [items, setItems] = useState([newItem()]);
+  // Edit mode: what this entry already held when it was opened (see availableFor).
+  const [originalItems, setOriginalItems] = useState([]);
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [documents, setDocuments] = useState(DEFAULT_DOCS);
@@ -130,6 +133,7 @@ export default function OutwardForm() {
         : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "", ewayBillNumber: x.ewayBillNumber || "" }];
       setReferences(refs.map((r) => ({ ...newReference(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "", ewayBillNumber: r.ewayBillNumber || "" })));
       setItems((x.items || []).map((i) => ({ id: makeId(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
+      setOriginalItems(x.items || []);
       setDispatchMode(x.dispatchMode || "By Road");
       setVehicleNumber(x.vehicleNumber || "");
       setRemarks(x.remarks || "");
@@ -141,6 +145,42 @@ export default function OutwardForm() {
 
 
   const warehouseId = selectedWarehouse?.id || "";
+
+  // ---- Stock in the selected warehouse -------------------------------------
+  // Editing: this entry's own quantities count as available again (server-side).
+  const { rows: stockRows, status: stockStatus, reload: reloadStock } = useOutwardStock(warehouseId, editId);
+  const stockByKey = useMemo(() => new Map(stockRows.map((r) => [stockKey(r.category, r.sku), r])), [stockRows]);
+  const originalQtyByKey = useMemo(() => {
+    const totals = new Map();
+    for (const i of originalItems) {
+      const key = stockKey(i.category, i.sku);
+      totals.set(key, (totals.get(key) || 0) + (Number(i.quantity) || 0));
+    }
+    return totals;
+  }, [originalItems]);
+
+  // How many of this model ONE item row can still take: what the warehouse has,
+  // minus what the OTHER rows on this form already take (so two rows of the same
+  // model can't add up to more than the stock). An entry being edited may keep
+  // the quantity it already dispatched, even if stock has dropped since.
+  const availableFor = (itemId, category, sku) => {
+    const key = stockKey(category, sku);
+    const row = stockByKey.get(key);
+    const base = Math.max(row?.available || 0, originalQtyByKey.get(key) || 0);
+    const takenByOthers = items.reduce(
+      (sum, i) => (i.id !== itemId && stockKey(i.category, i.sku) === key ? sum + (Number(i.quantity) || 0) : sum),
+      0
+    );
+    return { available: Math.max(base - takenByOthers, 0), uom: row?.uom || "" };
+  };
+
+  const stockBlockReason = !warehouseId
+    ? "Select warehouse first"
+    : stockStatus === "failed"
+      ? "Couldn't load stock"
+      : stockStatus !== "succeeded"
+        ? "Loading stock..."
+        : "";
   const permissions = getWarehousePermissions(user, selectedWarehouse || warehouseId);
   const operationBlocked = !selectedWarehouse || selectedWarehouse.company?.status === "Inactive" || selectedWarehouse.Outward !== "Active";
 
@@ -156,8 +196,9 @@ export default function OutwardForm() {
     if (i.id !== id) return i;
     // Picking a different category / SKU means a different product, so the
     // (hidden) company carried over from an older entry no longer applies.
-    if (field === "category") return { ...i, category: value, sku: "", companyName: "" };
-    if (field === "sku") return { ...i, sku: value, companyName: "" };
+    // The quantity is cleared too: it was typed against the previous model's stock limit.
+    if (field === "category") return { ...i, category: value, sku: "", companyName: "", quantity: "" };
+    if (field === "sku") return { ...i, sku: value, companyName: "", quantity: "" };
     return { ...i, [field]: value };
   }));
   const addItem = () => setItems((p) => [...p, newItem()]);
@@ -198,6 +239,19 @@ export default function OutwardForm() {
       if (!item.sku.trim()) return alert("Please select SKU / model for every item.");
       if (Number(item.quantity) <= 0) return alert("Please enter a valid quantity for every item.");
       if (!item.uom) return alert("Please select UOM for every item.");
+    }
+
+    // Can't dispatch more than is in stock. (The server checks again when saving.)
+    if (stockStatus !== "succeeded") return alert("Available stock hasn't loaded yet. Please wait a moment (or reload the page) and try again.");
+    for (const item of items) {
+      const { available, uom } = availableFor(item.id, item.category, item.sku);
+      if (Number(item.quantity) > available) {
+        return alert(
+          available <= 0
+            ? `"${item.sku}" is out of stock in this warehouse.`
+            : `Not enough stock for "${item.sku}": only ${available}${uom ? ` ${uom}` : ""} available for this item.`
+        );
+      }
     }
 
     const first = refsPayload[0];
@@ -299,17 +353,50 @@ export default function OutwardForm() {
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
             <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-semibold text-gray-900">Item details</h2><button type="button" onClick={addItem} className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700"><Plus size={14} />Add item</button></div>
             <ItemProductNotice isAdmin={isSuperAdmin} />
+            {warehouseId && stockStatus === "failed" ? (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <span>Couldn't load the available stock for this warehouse.</span>
+                <button type="button" onClick={reloadStock} className="font-semibold underline">Retry</button>
+              </div>
+            ) : (
+              <p className="mb-3 text-xs text-gray-500">Only models that are in stock in the selected warehouse can be dispatched, and the quantity can't be more than what is available.</p>
+            )}
             <div className="space-y-4">
-              {items.map((item, index) => (
+              {items.map((item, index) => {
+                const stockInfo = item.sku ? availableFor(item.id, item.category, item.sku) : null;
+                const overLimit = stockInfo && Number(item.quantity) > stockInfo.available;
+                return (
                 <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                   <div className="mb-3 flex items-center justify-between"><span className="text-xs font-medium text-gray-500">Item {index + 1}</span>{items.length > 1 && <button type="button" onClick={() => removeItem(item.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Delete item</button>}</div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-12">
-                    <ItemProductFields item={item} products={products} onChange={(field, value) => updateItem(item.id, field, value)} inputCls={inputCls} labelCls={labelCls} categoryClass="md:col-span-3" skuClass="md:col-span-5" />
-                    <div className="md:col-span-2"><label className={labelCls}>Quantity</label><input type="number" min="1" value={item.quantity} onChange={(e) => updateItem(item.id, "quantity", e.target.value)} placeholder="0" className={inputCls} /></div>
+                    <ItemProductFields item={item} products={products} onChange={(field, value) => updateItem(item.id, field, value)} inputCls={inputCls} labelCls={labelCls} categoryClass="md:col-span-3" skuClass="md:col-span-5" getStock={(category, sku) => availableFor(item.id, category, sku)} stockBlockReason={stockBlockReason} />
+                    <div className="md:col-span-2">
+                      <label className={labelCls}>Quantity</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max={stockInfo ? stockInfo.available : undefined}
+                        value={item.quantity}
+                        onChange={(e) => {
+                          let value = e.target.value;
+                          // Never let the quantity go above what is available.
+                          if (stockInfo && value !== "" && Number(value) > stockInfo.available) value = String(stockInfo.available);
+                          updateItem(item.id, "quantity", value);
+                        }}
+                        placeholder="0"
+                        className={`${inputCls} ${overLimit ? "border-red-400" : ""}`}
+                      />
+                      {stockInfo && stockStatus === "succeeded" && (
+                        <p className={`mt-1 text-[11px] ${overLimit || stockInfo.available <= 0 ? "text-red-600" : "text-gray-400"}`}>
+                          {stockInfo.available <= 0 ? "Out of stock" : overLimit ? `Only ${stockInfo.available} available` : `Max ${stockInfo.available}${stockInfo.uom ? ` ${stockInfo.uom}` : ""}`}
+                        </p>
+                      )}
+                    </div>
                     <div className="md:col-span-2"><label className={labelCls}>UOM</label><select value={item.uom} onChange={(e) => updateItem(item.id, "uom", e.target.value)} className={`${inputCls} appearance-none`}><option>Pcs</option><option>Meters</option><option>Bundles</option></select></div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 

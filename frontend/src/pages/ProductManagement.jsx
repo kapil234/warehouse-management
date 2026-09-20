@@ -54,7 +54,7 @@ export default function ProductManagement() {
   const [formError, setFormError] = useState("");
 
   useEffect(() => {
-    if (isAdmin) dispatch(fetchProducts());
+    if (isAdmin) dispatch(fetchProducts({ force: true })); // always fresh here
     return () => {
       dispatch(clearProductError());
     };

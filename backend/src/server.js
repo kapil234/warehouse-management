@@ -10,6 +10,11 @@ const startServer = async () => {
 
     console.log("PostgreSQL connected successfully");
 
+    // Prisma opens database connections lazily, and each new one costs a slow
+    // handshake. Open a few now (in parallel) so the first page load after a
+    // restart doesn't pay for them.
+    await Promise.all(Array.from({ length: 4 }, () => prisma.$queryRaw`SELECT 1`)).catch(() => {});
+
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });

@@ -14,6 +14,32 @@ import productRoutes from "./routes/productRoutes.js";
 
 const app = express();
 
+// Gzip responses (JSON compresses very well - lists/reports load noticeably
+// faster). Optional: needs `npm install compression`; skipped with a warning if
+// it isn't installed, so nothing breaks either way.
+try {
+  const { default: compression } = await import("compression");
+  app.use(compression());
+} catch {
+  console.warn("[perf] 'compression' is not installed - run `npm install compression` for faster responses.");
+}
+
+// Logs any request slower than SLOW_REQUEST_MS (default 700ms), so it is clear
+// which API is slow. Set SLOW_REQUEST_MS=0 to turn it off.
+const SLOW_REQUEST_MS = process.env.SLOW_REQUEST_MS === undefined ? 700 : Number(process.env.SLOW_REQUEST_MS);
+if (SLOW_REQUEST_MS > 0) {
+  app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+    res.on("finish", () => {
+      const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      if (ms >= SLOW_REQUEST_MS) {
+        console.warn(`[slow request] ${req.method} ${req.originalUrl} -> ${res.statusCode} in ${Math.round(ms)}ms`);
+      }
+    });
+    next();
+  });
+}
+
 const allowedOrigins = [
   "http://localhost:5173",
   "https://warehouse-management-pi-black.vercel.app",
@@ -34,6 +60,9 @@ app.use(
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
+    // Let the browser remember the CORS pre-check for a day instead of sending an
+    // extra OPTIONS request before every API call (browsers cap this themselves).
+    maxAge: 86400,
   })
 );
 

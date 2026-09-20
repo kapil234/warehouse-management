@@ -45,6 +45,41 @@ export async function recordAuditLog(client, {
   }
 }
 
+/**
+ * Same as recordAuditLog, but writes several entries in ONE insert.
+ * Used inside long transactions (editing an entry can produce many audit
+ * lines) so the trail costs a single database round trip instead of one each.
+ * Best-effort like recordAuditLog: it never throws.
+ */
+export async function recordAuditLogs(client, entries = []) {
+  if (!entries.length) return;
+  try {
+    await client.auditLog.createMany({
+      data: entries.map(({
+        entityType,
+        entityId,
+        entityNumber,
+        action,
+        description,
+        changes = null,
+        userId,
+        warehouseId,
+      }) => ({
+        entityType,
+        entityId,
+        entityNumber,
+        action,
+        description,
+        changes: changes ?? undefined,
+        userId,
+        warehouseId,
+      })),
+    });
+  } catch (err) {
+    console.error("Failed to write audit logs:", err);
+  }
+}
+
 // Field -> human label, used for both inward and outward "UPDATED" diffs.
 const FIELD_LABELS = {
   inwardType: "Inward type",

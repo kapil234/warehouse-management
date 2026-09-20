@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Link } from "react-router-dom";
-import { ArrowLeft, PackageMinus, PackagePlus, Search, Warehouse } from "lucide-react";
+import { ArrowLeft, ChevronDown, PackageMinus, PackagePlus, Search, Warehouse } from "lucide-react";
 
-import { selectSelectedWarehouse } from "../features/warehouse/warehouseSlice";
+import { fetchWarehouses, selectWarehouses } from "../features/warehouse/warehouseSlice";
 import {
   fetchStockLedger,
   selectStockLedger,
@@ -32,7 +32,7 @@ function TotalCard({ icon: Icon, iconClass, label, value }) {
 export default function StockLedger() {
   const dispatch = useDispatch();
 
-  const selectedWarehouse = useSelector(selectSelectedWarehouse);
+  const warehouses = useSelector(selectWarehouses);
   const rows = useSelector(selectStockLedger);
   const totals = useSelector(selectStockLedgerTotals);
   const pagination = useSelector(selectStockLedgerPagination);
@@ -43,21 +43,91 @@ export default function StockLedger() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
-  const warehouseId = selectedWarehouse?.id;
+  // Company -> warehouse. Both empty = total stock across everything the user
+  // can see. These are local to this page (they don't change the navbar's warehouse).
+  const [companyId, setCompanyId] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
+
+  // The server already limits this list by role (a manager only gets the
+  // warehouses they manage), so the dropdowns can't offer anything off-limits.
+  useEffect(() => {
+    dispatch(fetchWarehouses({}));
+  }, [dispatch]);
+
+  const companyOptions = useMemo(() => {
+    const seen = new Map();
+    warehouses.forEach((w) => {
+      const id = w.companyId || w.company?.id;
+      if (id && !seen.has(id)) seen.set(id, { id, name: w.company?.name || "Company" });
+    });
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [warehouses]);
+
+  const warehouseOptions = useMemo(() => {
+    if (!companyId) return [];
+    return warehouses
+      .filter((w) => (w.companyId || w.company?.id) === companyId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [warehouses, companyId]);
+
+  const selectedCompany = companyOptions.find((c) => c.id === companyId);
+  const selectedWarehouse = warehouseOptions.find((w) => w.id === warehouseId);
+
+  const scopeLabel = selectedWarehouse
+    ? `${selectedWarehouse.name}${selectedWarehouse.code ? ` (${selectedWarehouse.code})` : ""}`
+    : selectedCompany
+      ? `${selectedCompany.name} - all warehouses`
+      : "Total stock - all warehouses";
+
+  const handleCompanyChange = (id) => {
+    setCompanyId(id);
+    setWarehouseId(""); // the old warehouse belongs to the previous company
+    setPage(1);
+  };
+
+  const handleWarehouseChange = (id) => {
+    setWarehouseId(id);
+    setPage(1);
+  };
+
+  const showTotalStock = () => {
+    setCompanyId("");
+    setWarehouseId("");
+    setPage(1);
+  };
+
+  const ledgerParams = {
+    warehouseId: warehouseId || undefined,
+    companyId: companyId || undefined,
+    search,
+    page,
+    pageSize: 20,
+  };
 
   // Reset to page 1 whenever the search term changes.
   useEffect(() => {
     setPage(1);
   }, [search]);
 
-  // Debounce search so every keystroke doesn't fire a request.
+  // Debounce search so every keystroke doesn't fire a request. Always loads:
+  // with no company / warehouse chosen it is the total stock.
   useEffect(() => {
-    if (!warehouseId) return undefined;
     const timer = setTimeout(() => {
-      dispatch(fetchStockLedger({ warehouseId, search, page, pageSize: 20 }));
+      dispatch(
+        fetchStockLedger({
+          warehouseId: warehouseId || undefined,
+          companyId: companyId || undefined,
+          search,
+          page,
+          pageSize: 20,
+        })
+      );
     }, 300);
     return () => clearTimeout(timer);
-  }, [dispatch, warehouseId, search, page]);
+  }, [dispatch, warehouseId, companyId, search, page]);
+
+  const selectCls =
+    "w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-8 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400";
 
   return (
     <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
@@ -74,7 +144,7 @@ export default function StockLedger() {
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">Stock Ledger Summary</h1>
-            <p className="mt-1 text-sm text-gray-500">{selectedWarehouse?.name || "Select a warehouse"}</p>
+            <p className="mt-1 text-sm text-gray-500">{scopeLabel}</p>
           </div>
 
           <div className="relative">
@@ -89,14 +159,54 @@ export default function StockLedger() {
           </div>
         </div>
 
-        {!warehouseId && (
-          <div className="rounded-xl border border-gray-200 bg-white p-5 text-center">
-            <p className="text-sm text-gray-500">Select a warehouse from the navbar to view its stock ledger.</p>
-          </div>
-        )}
+        {/* =================================================
+            COMPANY -> WAREHOUSE
+            Nothing chosen = total stock.
+        ================================================= */}
 
-        {warehouseId && (
-          <>
+        <div className="mb-6 grid grid-cols-1 items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:grid-cols-[1fr_1fr_auto]">
+          <div>
+            <label className="mb-1.5 block text-[11px] font-medium text-gray-500">Company</label>
+            <div className="relative">
+              <select value={companyId} onChange={(e) => handleCompanyChange(e.target.value)} className={selectCls}>
+                <option value="">All companies</option>
+                {companyOptions.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-[11px] font-medium text-gray-500">Warehouse</label>
+            <div className="relative">
+              <select
+                value={warehouseId}
+                disabled={!companyId}
+                onChange={(e) => handleWarehouseChange(e.target.value)}
+                className={selectCls}
+              >
+                <option value="">{companyId ? "All warehouses" : "Select company first"}</option>
+                {warehouseOptions.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}{w.code ? ` (${w.code})` : ""}</option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={showTotalStock}
+            disabled={!companyId && !warehouseId}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Show total stock
+          </button>
+        </div>
+
+        <>
             {/* =============================================
                 TOTALS
             ============================================= */}
@@ -131,7 +241,7 @@ export default function StockLedger() {
                 <p className="text-sm font-medium text-red-600">{error}</p>
                 <button
                   type="button"
-                  onClick={() => dispatch(fetchStockLedger({ warehouseId, search, page, pageSize: 20 }))}
+                  onClick={() => dispatch(fetchStockLedger(ledgerParams))}
                   className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
                 >
                   Try again
@@ -214,8 +324,7 @@ export default function StockLedger() {
                 </div>
               )}
             </div>
-          </>
-        )}
+        </>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { verifyToken } from '../utils/jwt.js';
-import prisma from '../config/prisma.js';
+import { getAuthUser } from '../utils/userCache.js';
 
 /**
  * authenticate — verifies the JWT sent in the Authorization header.
@@ -22,10 +22,9 @@ export default async function authenticate(req, res, next) {
   try {
     const decoded = verifyToken(token); // { userId, role, iat, exp }
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, name: true, email: true, role: true, companyId: true },
-    });
+    // Cached for a few seconds and shared between requests that arrive together
+    // (see utils/userCache.js) - this used to be a database query on every request.
+    const user = await getAuthUser(decoded.userId);
 
     if (!user) {
       // Token is valid but the user was deleted since it was issued

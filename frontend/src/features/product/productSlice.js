@@ -6,7 +6,8 @@ import apiClient from "../../services/apiClient";
 //
 // A product is a category (Inverter, Cable, Panel...) plus a
 // SKU / module name. Everyone can read the list (the inward and
-// outward forms use it), only SUPER_ADMIN can create / edit / delete.
+// outward forms use it). SUPER_ADMIN and WAREHOUSE_MANAGER can create
+// (the inward form's "Add" button); only SUPER_ADMIN can edit / delete.
 // =====================================================
 
 const initialState = {
@@ -14,6 +15,10 @@ const initialState = {
 
   // Fetch status
   status: "idle",
+
+  // When the list was last loaded (ms since epoch) - lets screens reuse it
+  // instead of downloading it again every time they open.
+  fetchedAt: null,
 
   // Create / update / delete status
   saveStatus: "idle",
@@ -27,6 +32,20 @@ const sortProducts = (list) =>
       a.category.localeCompare(b.category) || a.sku.localeCompare(b.sku)
   );
 
+// The product list changes rarely, but the inward / outward forms asked for it
+// every single time they opened. Reuse it if it was loaded within this window.
+const PRODUCTS_FRESH_MS = 60 * 1000;
+
+// Should fetchProducts actually hit the server?
+//   - never while one request is already on its way (no duplicate requests)
+//   - `{ force: true }` always refreshes (Product Management uses it)
+//   - otherwise only when the list is missing or older than PRODUCTS_FRESH_MS
+export const shouldFetchProducts = (arg, productState, now = Date.now()) => {
+  if (productState.status === "loading") return false;
+  if (arg?.force) return true;
+  return !(productState.fetchedAt && now - productState.fetchedAt < PRODUCTS_FRESH_MS);
+};
+
 // GET /api/products
 export const fetchProducts = createAsyncThunk(
   "product/fetchAll",
@@ -39,6 +58,9 @@ export const fetchProducts = createAsyncThunk(
         err.response?.data?.message || "Failed to fetch products"
       );
     }
+  },
+  {
+    condition: (arg, { getState }) => shouldFetchProducts(arg, getState().product),
   }
 );
 
@@ -107,6 +129,7 @@ const productSlice = createSlice({
       })
       .addCase(fetchProducts.fulfilled, (state, action) => {
         state.status = "succeeded";
+        state.fetchedAt = Date.now();
         state.list = Array.isArray(action.payload)
           ? action.payload
           : action.payload?.data || [];

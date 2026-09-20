@@ -124,6 +124,9 @@ export default function InwardForm() {
   const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
 
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
+  // Admins and warehouse managers can add a missing category / SKU right from the item row.
+  const canAddProduct =
+    user?.role === "SUPER_ADMIN" || user?.role === "WAREHOUSE_MANAGER";
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -713,7 +716,7 @@ export default function InwardForm() {
               </button>
             </div>
 
-            <ItemProductNotice isAdmin={isSuperAdmin} />
+            <ItemProductNotice isAdmin={isSuperAdmin} canAdd={canAddProduct} />
 
             <div className="space-y-4">
               {items.map((item, index) => (
@@ -747,6 +750,7 @@ export default function InwardForm() {
                       labelCls={labelCls}
                       categoryClass="md:col-span-3"
                       skuClass="md:col-span-5"
+                      canAdd={canAddProduct}
                     />
 
                     <div className="md:col-span-2">

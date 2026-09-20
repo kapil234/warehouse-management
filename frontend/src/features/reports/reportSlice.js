@@ -22,6 +22,9 @@ const initialState = {
   stockLedgerPagination: null,
   stockLedgerStatus: "idle",
   stockLedgerError: null,
+  // id of the newest stock-ledger request, so a slow response for an
+  // earlier company / warehouse choice can't overwrite the current one
+  stockLedgerRequestId: null,
 };
 
 // -------------------------------------------------
@@ -62,10 +65,12 @@ export const fetchReportLedger = createAsyncThunk(
 
 export const fetchStockLedger = createAsyncThunk(
   "reports/fetchStockLedger",
-  async ({ warehouseId, search, page, pageSize } = {}, { rejectWithValue }) => {
+  // warehouseId -> that warehouse; companyId only -> that company's warehouses;
+  // neither -> total stock across everything the user can see.
+  async ({ warehouseId, companyId, search, page, pageSize } = {}, { rejectWithValue }) => {
     try {
       const { data } = await apiClient.get("/api/reports/stock-ledger", {
-        params: { warehouseId, search, page, pageSize },
+        params: { warehouseId, companyId, search, page, pageSize },
       });
       return {
         rows: data.data || [],
@@ -119,17 +124,20 @@ const reportSlice = createSlice({
       })
 
       // ---------------- stock ledger ----------------
-      .addCase(fetchStockLedger.pending, (state) => {
+      .addCase(fetchStockLedger.pending, (state, action) => {
         state.stockLedgerStatus = "loading";
         state.stockLedgerError = null;
+        state.stockLedgerRequestId = action.meta.requestId;
       })
       .addCase(fetchStockLedger.fulfilled, (state, action) => {
+        if (action.meta.requestId !== state.stockLedgerRequestId) return; // out of date
         state.stockLedgerStatus = "succeeded";
         state.stockLedger = action.payload.rows;
         state.stockLedgerTotals = action.payload.totals;
         state.stockLedgerPagination = action.payload.pagination;
       })
       .addCase(fetchStockLedger.rejected, (state, action) => {
+        if (action.meta.requestId !== state.stockLedgerRequestId) return; // out of date
         state.stockLedgerStatus = "failed";
         state.stockLedgerError = action.payload;
       });

@@ -1,8 +1,16 @@
 import prisma from "../config/prisma.js";
-import { recordAuditLog, diffFields, diffItems, describeItem } from "../utils/auditLog.js";
+import { recordAuditLog, recordAuditLogs, diffFields, diffItems, describeItem } from "../utils/auditLog.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
+import { getWarehouseStock, findShortages, shortageMessage } from "../utils/stock.js";
 
 const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "E-way bill", "Dispatch photo"];
+
+// Create / edit run the stock check and the save in one serializable transaction.
+// Prisma's default limit is 5 seconds, which is tight when every query is a
+// network round trip to a remote database; 10 seconds gives room without making
+// a genuinely stuck save wait long. (maxWait = how long to wait for a free
+// database connection before the transaction even starts.)
+const STOCK_TRANSACTION_OPTIONS = { isolationLevel: "Serializable", maxWait: 5000, timeout: 10000 };
 
 async function getScopedWarehouseIds(req) {
   if (req.user.role === "SUPER_ADMIN") return null;
@@ -127,6 +135,38 @@ export async function getOutwardById(req, res) {
   } catch (error) {
     console.error("Get outward error:", error);
     return res.status(500).json({ message: "Failed to fetch outward entry", error: error.message });
+  }
+}
+
+/**
+ * =========================================================
+ * GET /api/outward/stock?warehouseId=&excludeOutwardId=
+ * =========================================================
+ *
+ * What is in stock right now in ONE warehouse (inward minus outward, per
+ * category + SKU). The outward form uses it so the SKU / model dropdown can
+ * show "how many are available" and only allow picking what is in stock.
+ *
+ * Only rows with something available are returned - anything missing from
+ * the list is out of stock.
+ *
+ * excludeOutwardId: when EDITING an outward entry, pass its id so the
+ * quantities it already holds count as available again for that entry.
+ * =========================================================
+ */
+export async function listOutwardStock(req, res) {
+  try {
+    const { warehouseId, excludeOutwardId } = req.query;
+    await assertWarehouseAccess(req, warehouseId, null);
+    const stock = await getWarehouseStock(prisma, warehouseId, { excludeOutwardId: excludeOutwardId || undefined });
+    const data = Array.from(stock.values())
+      .filter((row) => row.available > 0)
+      .map(({ category, sku, uom, available }) => ({ category, sku, uom, available }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.sku.localeCompare(b.sku));
+    return res.json({ data });
+  } catch (error) {
+    console.error("List outward stock error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to fetch stock" });
   }
 }
 
@@ -286,7 +326,15 @@ export async function updateOutward(req, res) {
     ]);
     const itemChanges = diffItems(existing.items, newItems);
 
-    const result = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
+      // This entry's own current quantities are excluded from the outward total
+      // (they're being replaced), and it may keep quantities it already had.
+      const stock = await getWarehouseStock(tx, existing.warehouseId, { excludeOutwardId: id });
+      const shortages = findShortages(newItems, stock, existing.items);
+      if (shortages.length) {
+        throw Object.assign(new Error(shortageMessage(shortages)), { status: 422 });
+      }
+
       await tx.min.update({
         where: { id },
         data: {
@@ -321,8 +369,9 @@ export async function updateOutward(req, res) {
         userId: req.user.id,
         warehouseId: existing.warehouseId,
       };
+      const auditEntries = [];
       for (const change of fieldChanges) {
-        await recordAuditLog(tx, {
+        auditEntries.push({
           ...auditBase,
           action: "UPDATED",
           description: `${change.label} updated from "${change.oldValue || "—"}" to "${change.newValue || "—"}"`,
@@ -330,7 +379,7 @@ export async function updateOutward(req, res) {
         });
       }
       for (const item of itemChanges.added) {
-        await recordAuditLog(tx, {
+        auditEntries.push({
           ...auditBase,
           action: "ITEM_ADDED",
           description: `Item added: ${describeItem(item)} — qty ${item.quantity} ${item.uom}`,
@@ -338,7 +387,7 @@ export async function updateOutward(req, res) {
         });
       }
       for (const item of itemChanges.removed) {
-        await recordAuditLog(tx, {
+        auditEntries.push({
           ...auditBase,
           action: "ITEM_REMOVED",
           description: `Item removed: ${describeItem(item)} — qty ${item.quantity} ${item.uom}`,
@@ -346,26 +395,31 @@ export async function updateOutward(req, res) {
         });
       }
       for (const { item, oldQuantity, newQuantity } of itemChanges.updated) {
-        await recordAuditLog(tx, {
+        auditEntries.push({
           ...auditBase,
           action: "ITEM_UPDATED",
           description: `Quantity updated for ${describeItem(item)} from ${oldQuantity} to ${newQuantity} ${item.uom}`,
           changes: { field: "quantity", item: describeItem(item), oldValue: oldQuantity, newValue: newQuantity },
         });
       }
-      if (!fieldChanges.length && !itemChanges.added.length && !itemChanges.removed.length && !itemChanges.updated.length) {
-        await recordAuditLog(tx, {
+      if (!auditEntries.length) {
+        auditEntries.push({
           ...auditBase,
           action: "UPDATED",
           description: "Outward entry saved with no field changes",
         });
       }
+      // One insert for the whole trail (see recordAuditLogs).
+      await recordAuditLogs(tx, auditEntries);
+    }, STOCK_TRANSACTION_OPTIONS);
 
-      return tx.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } });
-    });
+    // Reloaded AFTER the transaction commits - it's only for the response, so it
+    // doesn't need to hold the transaction open.
+    const result = await prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } });
     return res.json({ message: "Outward entry updated successfully", data: result });
   } catch (error) {
     console.error("Update outward error:", error);
+    if (error.code === "P2034") return res.status(409).json({ message: "Stock was just updated by someone else. Please try again." });
     return res.status(error.status || 500).json({ message: error.message || "Failed to update outward entry" });
   }
 }
@@ -417,26 +471,37 @@ export async function createOutward(req, res) {
       existing = await prisma.min.findUnique({ where: { outwardNumber }, select: { id: true } });
     }
 
-    const result = await prisma.min.create({
-      data: {
-        outwardNumber,
-        warehouseId: warehouse.id,
-        outwardType: data.outwardType,
-        customerName: data.customerName.trim(),
-        companyName: data.companyName.trim(),
-        refDocType: normalizedRefs[0].refDocType,
-        refDocNumber: normalizedRefs[0].refDocNumber || normalizedRefs[0].ewayBillNumber || "N/A",
-        refDocDate: data.outwardDateTime ? new Date(data.outwardDateTime) : (data.refDocDate ? new Date(data.refDocDate) : new Date()),
-        ewayBillNumber: normalizedRefs[0].ewayBillNumber,
-        dispatchMode: data.dispatchMode || null,
-        vehicleNumber: data.vehicleNumber || null,
-        remarks: data.remarks || null,
-        createdById: req.user.id,
-        items: { create: items.map((item) => ({ category: item.category, companyName: item.companyName ? String(item.companyName).trim() || null : null, sku: item.sku.trim(), quantity: Number(item.quantity), uom: item.uom })) },
-        referenceDocuments: { create: normalizedRefs },
-      },
-      include: { items: true, referenceDocuments: true },
-    });
+    // Stock check + insert happen in ONE serializable transaction, so two
+    // people dispatching the same stock at the same moment can't both get
+    // through - the second one is refused (or asked to retry).
+    const result = await prisma.$transaction(async (tx) => {
+      const stock = await getWarehouseStock(tx, warehouse.id);
+      const shortages = findShortages(items, stock);
+      if (shortages.length) {
+        throw Object.assign(new Error(shortageMessage(shortages)), { status: 422 });
+      }
+
+      return tx.min.create({
+        data: {
+          outwardNumber,
+          warehouseId: warehouse.id,
+          outwardType: data.outwardType,
+          customerName: data.customerName.trim(),
+          companyName: data.companyName.trim(),
+          refDocType: normalizedRefs[0].refDocType,
+          refDocNumber: normalizedRefs[0].refDocNumber || normalizedRefs[0].ewayBillNumber || "N/A",
+          refDocDate: data.outwardDateTime ? new Date(data.outwardDateTime) : (data.refDocDate ? new Date(data.refDocDate) : new Date()),
+          ewayBillNumber: normalizedRefs[0].ewayBillNumber,
+          dispatchMode: data.dispatchMode || null,
+          vehicleNumber: data.vehicleNumber || null,
+          remarks: data.remarks || null,
+          createdById: req.user.id,
+          items: { create: items.map((item) => ({ category: item.category, companyName: item.companyName ? String(item.companyName).trim() || null : null, sku: item.sku.trim(), quantity: Number(item.quantity), uom: item.uom })) },
+          referenceDocuments: { create: normalizedRefs },
+        },
+        include: { items: true, referenceDocuments: true },
+      });
+    }, STOCK_TRANSACTION_OPTIONS);
 
     await recordAuditLog(prisma, {
       entityType: "OUTWARD",
@@ -453,6 +518,7 @@ export async function createOutward(req, res) {
     return res.status(201).json({ message: "Outward entry created successfully", data: { ...result, documents: [], ...documentStatus([]) } });
   } catch (error) {
     console.error("Create outward error:", error);
+    if (error.code === "P2034") return res.status(409).json({ message: "Stock was just updated by someone else. Please try again." });
     return res.status(error.status || 500).json({ message: error.message || "Failed to create outward entry", error: error.message });
   }
 }

@@ -254,30 +254,39 @@ export async function getReportLedger(req, res) {
  
 /**
  * =========================================================
- * GET /api/reports/stock-ledger?warehouseId=&search=&page=&pageSize=
+ * GET /api/reports/stock-ledger?warehouseId=&companyId=&search=&page=&pageSize=
  * =========================================================
  *
- * Full per-item stock ledger for ONE warehouse: every distinct
- * (category, model/SKU) that has ever moved through
- * inward or outward, with its lifetime inward total, outward
- * total, and current balance — the detail behind the "Stock
- * Ledger Summary" card. warehouseId is required, same as
- * listInwardModels / listInwardCompanies.
+ * Per-item stock ledger: every distinct (category, model/SKU) that has
+ * ever moved through inward or outward, with its lifetime inward total,
+ * outward total, and current balance — the detail behind the "Stock
+ * Ledger Summary" card.
+ *
+ * What it covers depends on what is asked for:
+ *   - warehouseId         -> that one warehouse
+ *   - companyId only      -> every warehouse of that company
+ *   - neither             -> total stock: every warehouse the caller can see
+ *                            (all of them for SUPER_ADMIN, only the ones a
+ *                            WAREHOUSE_MANAGER holds a MANAGE grant on)
+ * A manager asking for a warehouse they don't manage gets a 403.
  * =========================================================
  */
 export async function getStockLedger(req, res) {
   try {
-    const { warehouseId, search = "", page = "1", pageSize = "20" } = req.query;
-    if (!warehouseId) return res.status(422).json({ message: "warehouseId is required" });
- 
-    // Same access check listInwardModels / listInwardCompanies use.
-    if (req.user.role === "WAREHOUSE_MANAGER") {
-      const access = await prisma.warehouseAccess.findUnique({
-        where: { userId_warehouseId: { userId: req.user.id, warehouseId } },
+    const { warehouseId, companyId, search = "", page = "1", pageSize = "20" } = req.query;
+
+    // One warehouse, or (no warehouse chosen) everything the caller may see.
+    // Throws a 403 if a manager asks for a warehouse they don't manage.
+    let warehouseIds = await resolveWarehouseIds(req);
+
+    // Company chosen but no warehouse: narrow to that company's warehouses
+    // (still only ones the caller may see).
+    if (!warehouseId && companyId) {
+      const companyWarehouses = await prisma.warehouse.findMany({
+        where: { companyId, ...(warehouseIds ? { id: { in: warehouseIds } } : {}) },
+        select: { id: true },
       });
-      if (!access || access.accessLevel !== "MANAGE") {
-        return res.status(403).json({ message: "You don't have access to this warehouse" });
-      }
+      warehouseIds = companyWarehouses.map((w) => w.id);
     }
  
     const searchWhere = search
@@ -292,17 +301,18 @@ export async function getStockLedger(req, res) {
     const [inwardGroups, outwardGroups] = await Promise.all([
       prisma.grnItem.groupBy({
         by: ["category", "sku", "uom"],
-        where: { grn: { warehouseId }, ...searchWhere },
+        where: { grn: warehouseWhere(warehouseIds), ...searchWhere },
         _sum: { quantity: true },
       }),
       prisma.minItem.groupBy({
         by: ["category", "sku", "uom"],
-        where: { min: { warehouseId }, ...searchWhere },
+        where: { min: warehouseWhere(warehouseIds), ...searchWhere },
         _sum: { quantity: true },
       }),
     ]);
  
-    // Merge on category + sku. Items no longer carry a company, and older
+    // Merge on category + sku (across warehouses too, when more than one is in
+    // scope, so "total stock" shows one row per model). Items no longer carry a company, and older
     // entries that still have one must land in the same row as newer ones,
     // otherwise stock would show up split (inward under a brand, outward under "-").
     const key = (row) => `${row.category}::${row.sku}`;
@@ -359,6 +369,8 @@ export async function getStockLedger(req, res) {
     });
   } catch (error) {
     console.error("Stock ledger error:", error);
-    return res.status(500).json({ message: "Failed to build stock ledger", error: error.message });
+    return res
+      .status(error.status || 500)
+      .json({ message: error.status ? error.message : "Failed to build stock ledger", error: error.message });
   }
 }

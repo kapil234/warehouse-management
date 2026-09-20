@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import prisma from "../config/prisma.js";
 import { signToken } from "../utils/jwt.js";
+import { invalidateCachedUser } from "../utils/userCache.js";
 import {
   USER_COMPANIES_SELECT,
   parseCompanyIds,
@@ -531,6 +532,10 @@ export async function updateUserRole(req, res) {
       });
     });
 
+    // The signed-in-user lookup is cached briefly (utils/userCache.js) -
+    // clear it so the new role applies immediately.
+    invalidateCachedUser(targetUser.id);
+
     // ---------------------------------------------
     // Response
     // ---------------------------------------------
@@ -659,6 +664,8 @@ export async function updateUser(req, res) {
         createdAt: true,
       },
     });
+
+    invalidateCachedUser(req.params.id);
 
     // ---------------------------------------------
     // Response
@@ -837,6 +844,8 @@ export async function deleteUser(req, res) {
     await prisma.user.delete({
       where: { id: req.params.id },
     });
+
+    invalidateCachedUser(req.params.id);
 
     // ---------------------------------------------
     // Response

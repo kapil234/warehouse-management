@@ -5,6 +5,7 @@ import {
   createOutward,
   updateOutward,
   listOutwardModels,
+  listOutwardStock,
   createOutwardModel,
   listOutwardCompanies,
   createOutwardCompany,
@@ -20,6 +21,8 @@ const router = express.Router();
 router.use(authenticate);
 router.get("/", listOutward);
 router.get("/models", listOutwardModels);
+// Available stock per model - feeds the outward form dropdown. Must stay above "/:id".
+router.get("/stock", listOutwardStock);
 router.post("/models", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), createOutwardModel);
 router.get("/companies", listOutwardCompanies);
 router.post("/companies", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), createOutwardCompany);
