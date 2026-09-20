@@ -1,24 +1,5 @@
 import prisma from "../config/prisma.js";
 
-/**
- * =========================================================
- * PRODUCT MASTER
- * =========================================================
- *
- * A product is a (category, sku) pair, e.g. ("Inverter", "GW5000-DNS").
- *
- *   - Everyone who is logged in can LIST products, because the
- *     inward / outward forms need them for the item dropdowns.
- *   - Only SUPER_ADMIN can create, edit or delete them (enforced
- *     in productRoutes.js).
- *
- * GRN / outward items keep category + sku as plain text, so:
- *   - deleting a product never damages past entries, and
- *   - editing a product's category / SKU renames it on past
- *     entries as well, so stock ledger totals stay in one row.
- * =========================================================
- */
-
 const MAX_LENGTH = 100;
 
 const PRODUCT_SELECT = {
@@ -102,7 +83,7 @@ export async function listProducts(req, res) {
 }
 
 // POST /api/products
-// SUPER_ADMIN only.
+// SUPER_ADMIN and WAREHOUSE_MANAGER.
 export async function createProduct(req, res) {
   try {
     const rawCategory = clean(req.body.category);
@@ -226,3 +207,4 @@ export async function deleteProduct(req, res) {
     });
   }
 }
+

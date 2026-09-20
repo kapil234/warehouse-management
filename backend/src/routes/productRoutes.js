@@ -15,8 +15,11 @@ router.use(authenticate);
 // Everyone logged in can read the list (inward / outward forms need it).
 router.get("/", listProducts);
 
-// Only admins can change the product list.
-router.post("/", authorize("SUPER_ADMIN"), createProduct);
+// Admins and warehouse managers can ADD a product (the inward form has an
+// "Add" button next to Category / SKU for items missing from the dropdown).
+router.post("/", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), createProduct);
+
+// Only admins can rename or delete existing products.
 router.patch("/:id", authorize("SUPER_ADMIN"), updateProduct);
 router.delete("/:id", authorize("SUPER_ADMIN"), deleteProduct);
 
