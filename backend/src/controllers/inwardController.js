@@ -231,8 +231,15 @@ export async function listGrn(req, res) {
 
                 ...(dateTo
                   ? {
+                      // dateTo arrives as a plain "YYYY-MM-DD" date with no
+                      // time, which Date() parses as that day's midnight UTC.
+                      // A GRN created any time later that same day would then
+                      // be > the "lte" bound and get filtered out - which is
+                      // why a just-created GRN wouldn't show up under
+                      // "Today" / "Last 7 days" on the list page. Extend the
+                      // bound to the end of that day instead.
                       lte: new Date(
-                        dateTo
+                        `${dateTo}T23:59:59.999`
                       ),
                     }
                   : {}),

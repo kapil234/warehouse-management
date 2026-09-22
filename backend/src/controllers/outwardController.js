@@ -74,7 +74,8 @@ export async function listOutward(req, res) {
         type ? { outwardType: type } : {},
         dateFrom || dateTo ? { createdAt: {
           ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-          ...(dateTo ? { lte: new Date(dateTo) } : {}),
+          // See inwardController.listGrn for why this needs end-of-day, not midnight.
+          ...(dateTo ? { lte: new Date(`${dateTo}T23:59:59.999`) } : {}),
         } } : {},
       ],
     };
