@@ -21,6 +21,7 @@ import {
   selectOutwardList,
   selectOutwardListStatus,
   selectOutwardListError,
+  selectOutwardListPagination,
   selectOutwardHistory,
   selectOutwardHistoryStatus,
 } from "../features/outward/outwardSlice";
@@ -28,6 +29,19 @@ import { formatOutwardEntry } from "../features/outward/outwardHelpers";
 import HistoryPanel from "../features/shared/HistoryPanel";
 
 const filters = ["All types", "Sales", "Service", "Returns", "Damage/Scrap"];
+
+// Maps the filter chips to the exact outwardType value the backend expects
+// (?type=...), so filtering happens in the database query instead of after
+// downloading every row.
+const FILTER_TO_OUTWARD_TYPE = {
+  Sales: "Sale - Stock Out",
+  Service: "Service - Stock Out",
+  Returns: "Return to Vendor",
+  "Damage/Scrap": "Damage / Scrap Out",
+};
+
+// How long to wait after the user stops typing before hitting the API.
+const SEARCH_DEBOUNCE_MS = 350;
 
 // -------------------------------------------------
 // Date range helpers (local calendar filter)
@@ -280,15 +294,28 @@ export default function Outward() {
   const listError = useSelector(selectOutwardListError);
   const history = useSelector(selectOutwardHistory);
   const historyStatus = useSelector(selectOutwardHistoryStatus);
+  const pagination = useSelector(selectOutwardListPagination);
   const loading = listStatus === "loading";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("All types");
   const [showPendingOnly, setShowPendingOnly] = useState(false);
 
   // Date range filter - defaults to the last 7 days.
   const [datePreset, setDatePreset] = useState("7d");
   const [dateRange, setDateRange] = useState(() => getPresetRange("7d"));
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Any filter change starts back at page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to]);
 
   const handleDatePresetSelect = (preset) => {
     setDatePreset(preset);
@@ -307,57 +334,34 @@ export default function Outward() {
   const scopedWarehouseId =
     currentUser?.role === "WAREHOUSE_MANAGER" ? selectedWarehouse?.id : undefined;
 
+  const queryParams = useMemo(
+    () => ({
+      warehouseId: scopedWarehouseId,
+      search: debouncedSearch || undefined,
+      type: FILTER_TO_OUTWARD_TYPE[activeFilter],
+      dateFrom: datePreset !== "all" ? dateRange.from || undefined : undefined,
+      dateTo: datePreset !== "all" ? dateRange.to || undefined : undefined,
+      page,
+      pageSize: 20,
+    }),
+    [scopedWarehouseId, debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to, page]
+  );
+
   useEffect(() => {
-    dispatch(fetchOutwardList({ warehouseId: scopedWarehouseId }));
+    dispatch(fetchOutwardList(queryParams));
+  }, [dispatch, queryParams]);
+
+  useEffect(() => {
     dispatch(fetchOutwardHistory({ warehouseId: scopedWarehouseId }));
   }, [dispatch, scopedWarehouseId]);
 
   const outwardData = useMemo(() => rawList.map(formatOutwardEntry), [rawList]);
 
-  const filteredData = outwardData.filter((item) => {
-    const searchText = search.toLowerCase().trim();
-
-    const searchMatch =
-      !searchText ||
-      String(item.outward).toLowerCase().includes(searchText) ||
-      String(item.party).toLowerCase().includes(searchText) ||
-      String(item.type).toLowerCase().includes(searchText) ||
-      String(item.refDocNumber || "").toLowerCase().includes(searchText) ||
-      String(item.ewayBillNumber || "").toLowerCase().includes(searchText) ||
-      String(item.vehicleNumber || "").toLowerCase().includes(searchText);
-
-    let typeMatch = true;
-    if (activeFilter === "Sales") typeMatch = item.type.includes("Sale");
-    if (activeFilter === "Service") typeMatch = item.type.includes("Service");
-    if (activeFilter === "Returns") typeMatch = item.type.includes("Return");
-    if (activeFilter === "Damage/Scrap") typeMatch = item.type.includes("Damage") || item.type.includes("Scrap");
-
-    const pendingMatch = showPendingOnly ? item.statusType !== "complete" : true;
-
-    let dateMatch = true;
-    if (datePreset !== "all") {
-      if (!item.createdAt) {
-        dateMatch = false;
-      } else {
-        const created = new Date(item.createdAt);
-
-        if (Number.isNaN(created.getTime())) {
-          dateMatch = false;
-        } else {
-          if (dateRange.from) {
-            const fromBoundary = new Date(`${dateRange.from}T00:00:00`);
-            if (created < fromBoundary) dateMatch = false;
-          }
-          if (dateMatch && dateRange.to) {
-            const toBoundary = new Date(`${dateRange.to}T23:59:59.999`);
-            if (created > toBoundary) dateMatch = false;
-          }
-        }
-      }
-    }
-
-    return searchMatch && typeMatch && pendingMatch && dateMatch;
-  });
+  // Search / type / date are now applied server-side (see queryParams above).
+  // "Pending docs" only filters within the page currently on screen.
+  const filteredData = outwardData.filter((item) =>
+    showPendingOnly ? item.statusType !== "complete" : true
+  );
 
   const groupedData = filteredData.reduce((groups, item) => {
     if (!groups[item.date]) groups[item.date] = [];
@@ -365,10 +369,17 @@ export default function Outward() {
     return groups;
   }, {});
 
-  const totalEntries = outwardData.length;
+  const totalEntries = pagination.total;
+  // These three read off the current page only - a full across-all-pages
+  // figure would need its own aggregate endpoint.
   const todaysOutward = outwardData.filter((item) => item.date === "Today").length;
   const documentsPending = outwardData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
   const completed = outwardData.filter((item) => item.statusType === "complete").length;
+
+  const goToPage = (next) => {
+    const clamped = Math.min(Math.max(next, 1), pagination.totalPages || 1);
+    setPage(clamped);
+  };
 
   const openOutward = (item) => {
     if (!item.id) {
@@ -478,7 +489,7 @@ export default function Outward() {
             <p className="text-sm font-medium text-red-600">{listError}</p>
             <button
               type="button"
-              onClick={() => dispatch(fetchOutwardList({ warehouseId: scopedWarehouseId }))}
+              onClick={() => dispatch(fetchOutwardList(queryParams))}
               className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
             >
               Try again
@@ -490,7 +501,7 @@ export default function Outward() {
           <div className="hidden overflow-hidden rounded-2xl border border-gray-200 bg-white md:block">
             <div className="border-b border-gray-200 px-5 py-4">
               <h2 className="text-sm font-semibold text-gray-900">Outward history</h2>
-              <p className="mt-0.5 text-xs text-gray-500">{filteredData.length} entries found</p>
+              <p className="mt-0.5 text-xs text-gray-500">{pagination.total} entries found</p>
             </div>
 
             <div className="overflow-x-auto">
@@ -549,14 +560,61 @@ export default function Outward() {
 
             <div className="flex items-center justify-between border-t border-gray-200 px-5 py-3">
               <p className="text-xs text-gray-500">
-                Showing 1–{filteredData.length} of {outwardData.length}
+                Showing{" "}
+                {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1}
+                –{Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}
               </p>
               <div className="flex gap-1">
-                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-400">Previous</button>
-                <button type="button" className="rounded-md bg-[#185FA5] px-3 py-1.5 text-xs font-medium text-white">1</button>
-                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">2</button>
-                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">3</button>
-                <button type="button" className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700">Next</button>
+                <button
+                  type="button"
+                  onClick={() => goToPage(pagination.page - 1)}
+                  disabled={pagination.page <= 1}
+                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                >
+                  Previous
+                </button>
+
+                {Array.from({ length: pagination.totalPages || 1 }, (_, i) => i + 1)
+                  .filter(
+                    (n) =>
+                      n === 1 ||
+                      n === pagination.totalPages ||
+                      Math.abs(n - pagination.page) <= 1
+                  )
+                  .reduce((acc, n) => {
+                    if (acc.length && n - acc[acc.length - 1] > 1) acc.push("…");
+                    acc.push(n);
+                    return acc;
+                  }, [])
+                  .map((n, i) =>
+                    n === "…" ? (
+                      <span key={`ellipsis-${i}`} className="px-2 py-1.5 text-xs text-gray-400">
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => goToPage(n)}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                          n === pagination.page
+                            ? "bg-[#185FA5] text-white"
+                            : "border border-gray-200 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+
+                <button
+                  type="button"
+                  onClick={() => goToPage(pagination.page + 1)}
+                  disabled={pagination.page >= (pagination.totalPages || 1)}
+                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                >
+                  Next
+                </button>
               </div>
             </div>
           </div>

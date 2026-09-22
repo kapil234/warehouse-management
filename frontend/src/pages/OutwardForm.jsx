@@ -21,6 +21,7 @@ import { fetchCompanies, selectAllCompanies } from "../features/company/companyS
 import useProducts from "../features/product/useProducts";
 import useOutwardStock, { stockKey } from "../features/outward/useOutwardStock";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
+import PartyNameField from "../components/PartyNameField";
 
 const makeId = () => crypto.randomUUID();
 const getDateTimeLocal = () => {
@@ -472,7 +473,7 @@ export default function OutwardForm() {
               <div><label className={labelCls}>Outward date and time</label><input type="datetime-local" value={outwardDateTime} onChange={(e) => setOutwardDateTime(e.target.value)} className={inputCls} /></div>
               <div><label className={labelCls}>Outward type</label><div className="relative"><select value={outwardType} onChange={(e) => setOutwardType(e.target.value)} className={`${inputCls} appearance-none`}><option>Sale - Stock Out</option><option>Service - Stock Out</option><option>Return to Vendor</option><option>Damage / Scrap Out</option></select><ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /></div></div>
             </div>
-            <div className="mt-4"><label className={labelCls}>Customer / Recipient name</label><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Search or enter customer" className={inputCls} /></div>
+            <div className="mt-4"><PartyNameField value={customerName} onChange={setCustomerName} storageKey="outward-customer-names" label="Customer / Recipient name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer / recipient name" addLabel="+ Add new customer / recipient" /></div>
 
             <div className="mt-4 flex items-center justify-between">
               <span className="text-xs font-semibold text-gray-700">Reference documents</span>

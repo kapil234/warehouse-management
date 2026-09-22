@@ -10,6 +10,9 @@ const initialState = {
   list: [],
   listStatus: "idle", // idle | loading | succeeded | failed
   listError: null,
+  // Real server-side pagination (page/pageSize as requested, total/totalPages
+  // as returned by the backend) - the list only ever holds ONE page of rows.
+  listPagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 },
 
   // detail page
   current: null,
@@ -44,10 +47,21 @@ const initialState = {
 
 export const fetchInwardList = createAsyncThunk(
   "inward/fetchList",
-  async ({ warehouseId } = {}, { rejectWithValue }) => {
+  async (
+    { warehouseId, search, type, dateFrom, dateTo, page = 1, pageSize = 20 } = {},
+    { rejectWithValue }
+  ) => {
     try {
       const { data } = await apiClient.get("/api/grn", {
-        params: warehouseId ? { warehouseId } : undefined,
+        params: {
+          ...(warehouseId ? { warehouseId } : {}),
+          ...(search ? { search } : {}),
+          ...(type ? { type } : {}),
+          ...(dateFrom ? { dateFrom } : {}),
+          ...(dateTo ? { dateTo } : {}),
+          page,
+          pageSize,
+        },
       });
 
       const grns = Array.isArray(data)
@@ -58,7 +72,7 @@ export const fetchInwardList = createAsyncThunk(
         ? data.grns
         : [];
 
-      return grns;
+      return { grns, pagination: data.pagination || null };
     } catch (err) {
       return rejectWithValue(
         err.response?.data?.message || "Failed to fetch inward entries"
@@ -280,7 +294,10 @@ const inwardSlice = createSlice({
       })
       .addCase(fetchInwardList.fulfilled, (state, action) => {
         state.listStatus = "succeeded";
-        state.list = action.payload;
+        state.list = action.payload.grns;
+        if (action.payload.pagination) {
+          state.listPagination = action.payload.pagination;
+        }
       })
       .addCase(fetchInwardList.rejected, (state, action) => {
         state.listStatus = "failed";
@@ -436,6 +453,7 @@ export const { clearCurrentInward, resetCreateStatus } = inwardSlice.actions;
 export const selectInwardList = (state) => state.inward.list;
 export const selectInwardListStatus = (state) => state.inward.listStatus;
 export const selectInwardListError = (state) => state.inward.listError;
+export const selectInwardListPagination = (state) => state.inward.listPagination;
 
 export const selectCurrentInward = (state) => state.inward.current;
 export const selectInwardDetailStatus = (state) => state.inward.detailStatus;

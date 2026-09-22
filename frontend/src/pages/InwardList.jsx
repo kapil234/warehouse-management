@@ -23,6 +23,7 @@ import {
   selectInwardList,
   selectInwardListStatus,
   selectInwardListError,
+  selectInwardListPagination,
   selectInwardHistory,
   selectInwardHistoryStatus,
 } from "../features/inward/inwardSlice";
@@ -31,6 +32,19 @@ import { formatGrn } from "../features/inward/inwardHelpers";
 import HistoryPanel from "../features/shared/HistoryPanel";
 
 const filters = ["All types", "New Stock", "Service Stock", "Returns"];
+
+// Maps the filter chips to the exact inwardType value the backend expects
+// (?type=...), so filtering happens in the database query instead of after
+// downloading every row.
+const FILTER_TO_INWARD_TYPE = {
+  "New Stock": "Purchase - New Stock",
+  "Service Stock": "Purchase - Service Stock",
+  Returns: "Return of Purchase",
+};
+
+// How long to wait after the user stops typing before hitting the API -
+// otherwise every keystroke fired its own request.
+const SEARCH_DEBOUNCE_MS = 350;
 
 function toDateInputValue(date) {
   const y = date.getFullYear();
@@ -426,9 +440,17 @@ export default function Inward() {
     selectInwardHistoryStatus
   );
 
+  const pagination = useSelector(
+    selectInwardListPagination
+  );
+
   const loading = listStatus === "loading";
 
   const [search, setSearch] = useState("");
+  // Debounced value actually sent to the API, so fast typing doesn't fire a
+  // request per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
   const [activeFilter, setActiveFilter] =
     useState("All types");
 
@@ -441,6 +463,22 @@ export default function Inward() {
   const [dateRange, setDateRange] = useState(
     () => getPresetRange("7d")
   );
+
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setDebouncedSearch(search.trim()),
+      SEARCH_DEBOUNCE_MS
+    );
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Any filter change starts back at page 1 - the old page number may not
+  // exist any more in the newly filtered result set.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to]);
 
   const handleDatePresetSelect = (preset) => {
     setDatePreset(preset);
@@ -460,13 +498,24 @@ export default function Inward() {
       ? selectedWarehouse?.id
       : undefined;
 
-  useEffect(() => {
-    dispatch(
-      fetchInwardList({
-        warehouseId: scopedWarehouseId,
-      })
-    );
+  const queryParams = useMemo(
+    () => ({
+      warehouseId: scopedWarehouseId,
+      search: debouncedSearch || undefined,
+      type: FILTER_TO_INWARD_TYPE[activeFilter],
+      dateFrom: datePreset !== "all" ? dateRange.from || undefined : undefined,
+      dateTo: datePreset !== "all" ? dateRange.to || undefined : undefined,
+      page,
+      pageSize: 20,
+    }),
+    [scopedWarehouseId, debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to, page]
+  );
 
+  useEffect(() => {
+    dispatch(fetchInwardList(queryParams));
+  }, [dispatch, queryParams]);
+
+  useEffect(() => {
     dispatch(
       fetchInwardHistory({
         warehouseId: scopedWarehouseId,
@@ -479,96 +528,11 @@ export default function Inward() {
     [rawList]
   );
 
-  const filteredData = inwardData.filter(
-    (item) => {
-      const searchText =
-        search.toLowerCase().trim();
-
-      const searchMatch =
-        !searchText ||
-        String(item.grn)
-          .toLowerCase()
-          .includes(searchText) ||
-        String(item.party)
-          .toLowerCase()
-          .includes(searchText) ||
-        String(item.type)
-          .toLowerCase()
-          .includes(searchText) ||
-        String(item.refDocNumber || "")
-          .toLowerCase()
-          .includes(searchText) ||
-        String(item.ewayBillNumber || "")
-          .toLowerCase()
-          .includes(searchText);
-
-      let typeMatch = true;
-
-      if (activeFilter === "New Stock") {
-        typeMatch =
-          item.type.includes("New Stock");
-      }
-
-      if (activeFilter === "Service Stock") {
-        typeMatch =
-          item.type.includes("Service Stock");
-      }
-
-      if (activeFilter === "Returns") {
-        typeMatch =
-          item.type.includes("Return");
-      }
-
-      const pendingMatch = showPendingOnly
-        ? item.statusType !== "complete"
-        : true;
-
-      let dateMatch = true;
-
-      if (datePreset !== "all") {
-        if (!item.createdAt) {
-          dateMatch = false;
-        } else {
-          const created = new Date(
-            item.createdAt
-          );
-
-          if (Number.isNaN(created.getTime())) {
-            dateMatch = false;
-          } else {
-            if (dateRange.from) {
-              const fromBoundary = new Date(
-                `${dateRange.from}T00:00:00`
-              );
-
-              if (created < fromBoundary) {
-                dateMatch = false;
-              }
-            }
-
-            if (
-              dateMatch &&
-              dateRange.to
-            ) {
-              const toBoundary = new Date(
-                `${dateRange.to}T23:59:59.999`
-              );
-
-              if (created > toBoundary) {
-                dateMatch = false;
-              }
-            }
-          }
-        }
-      }
-
-      return (
-        searchMatch &&
-        typeMatch &&
-        pendingMatch &&
-        dateMatch
-      );
-    }
+  // Search / type / date are now applied server-side (see queryParams above).
+  // "Pending docs" only filters within the page currently on screen - it
+  // isn't a backend query param, unlike the others.
+  const filteredData = inwardData.filter((item) =>
+    showPendingOnly ? item.statusType !== "complete" : true
   );
 
   const groupedData = filteredData.reduce(
@@ -584,8 +548,11 @@ export default function Inward() {
     {}
   );
 
-  const totalEntries = inwardData.length;
+  const totalEntries = pagination.total;
 
+  // These three read off the current page only (same as before pagination was
+  // wired up for real) - a full across-all-pages figure would need its own
+  // aggregate endpoint.
   const todaysInward = inwardData.filter(
     (item) => item.date === "Today"
   ).length;
@@ -601,6 +568,14 @@ export default function Inward() {
   const completed = inwardData.filter(
     (item) => item.statusType === "complete"
   ).length;
+
+  const goToPage = (next) => {
+    const clamped = Math.min(
+      Math.max(next, 1),
+      pagination.totalPages || 1
+    );
+    setPage(clamped);
+  };
 
   const openInward = (item) => {
     if (!item.id) {
@@ -781,12 +756,7 @@ export default function Inward() {
             <button
               type="button"
               onClick={() =>
-                dispatch(
-                  fetchInwardList({
-                    warehouseId:
-                      scopedWarehouseId,
-                  })
-                )
+                dispatch(fetchInwardList(queryParams))
               }
               className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
             >
@@ -803,7 +773,7 @@ export default function Inward() {
               </h2>
 
               <p className="mt-0.5 text-xs text-gray-500">
-                {filteredData.length} entries found
+                {pagination.total} entries found
               </p>
             </div>
 
@@ -939,42 +909,73 @@ export default function Inward() {
 
             <div className="flex items-center justify-between border-t border-gray-200 px-5 py-3">
               <p className="text-xs text-gray-500">
-                Showing 1–{filteredData.length} of{" "}
-                {inwardData.length}
+                Showing{" "}
+                {pagination.total === 0
+                  ? 0
+                  : (pagination.page - 1) * pagination.pageSize + 1}
+                –
+                {Math.min(
+                  pagination.page * pagination.pageSize,
+                  pagination.total
+                )}{" "}
+                of {pagination.total}
               </p>
 
               <div className="flex gap-1">
                 <button
                   type="button"
-                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-400"
+                  onClick={() => goToPage(pagination.page - 1)}
+                  disabled={pagination.page <= 1}
+                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
                 >
                   Previous
                 </button>
 
-                <button
-                  type="button"
-                  className="rounded-md bg-[#185FA5] px-3 py-1.5 text-xs font-medium text-white"
-                >
-                  1
-                </button>
+                {Array.from(
+                  { length: pagination.totalPages || 1 },
+                  (_, i) => i + 1
+                )
+                  // Keep this short: current page, one on each side, first and last.
+                  .filter(
+                    (n) =>
+                      n === 1 ||
+                      n === pagination.totalPages ||
+                      Math.abs(n - pagination.page) <= 1
+                  )
+                  .reduce((acc, n) => {
+                    if (acc.length && n - acc[acc.length - 1] > 1) acc.push("…");
+                    acc.push(n);
+                    return acc;
+                  }, [])
+                  .map((n, i) =>
+                    n === "…" ? (
+                      <span
+                        key={`ellipsis-${i}`}
+                        className="px-2 py-1.5 text-xs text-gray-400"
+                      >
+                        …
+                      </span>
+                    ) : (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => goToPage(n)}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                          n === pagination.page
+                            ? "bg-[#185FA5] text-white"
+                            : "border border-gray-200 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
 
                 <button
                   type="button"
-                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700"
-                >
-                  2
-                </button>
-
-                <button
-                  type="button"
-                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700"
-                >
-                  3
-                </button>
-
-                <button
-                  type="button"
-                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700"
+                  onClick={() => goToPage(pagination.page + 1)}
+                  disabled={pagination.page >= (pagination.totalPages || 1)}
+                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
                 >
                   Next
                 </button>

@@ -128,27 +128,43 @@ export async function getReportSummary(req, res) {
     ]);
     const totalStock = (stockIn._sum.quantity || 0) - (stockOut._sum.quantity || 0);
  
-    // ---- entries within the selected period (need their items +
-    // doc status, so fetch the small stuff, not the full detail shape
-    // list endpoints return) ----
-    const [grns, outwards] = await Promise.all([
+    // ---- entries within the selected period ----
+    // Sum in the database instead of pulling every GRN/outward row (with its
+    // full item list) into Node just to add them up - this used to fetch
+    // every transaction ever made in the selected range on every summary
+    // load, which only got slower as the business grew.
+    const [inwardAgg, outwardAgg, grnCount, minCount] = await Promise.all([
+      prisma.grnItem.aggregate({
+        _sum: { quantity: true },
+        where: { grn: { ...warehouseWhere(warehouseIds), ...period } },
+      }),
+      prisma.minItem.aggregate({
+        _sum: { quantity: true },
+        where: { min: { ...warehouseWhere(warehouseIds), ...period } },
+      }),
+      prisma.grn.count({ where: { ...warehouseWhere(warehouseIds), ...period } }),
+      prisma.min.count({ where: { ...warehouseWhere(warehouseIds), ...period } }),
+    ]);
+
+    const totalInwardUnits = inwardAgg._sum.quantity || 0;
+    const totalOutwardUnits = outwardAgg._sum.quantity || 0;
+    const totalTransactions = grnCount + minCount;
+
+    // ---- documents pending, across this period's entries ----
+    // Only need ids here (not the full item detail above), so this stays a
+    // lightweight query even when the period covers a lot of entries.
+    const [grnRows, outwardRows] = await Promise.all([
       prisma.grn.findMany({
         where: { ...warehouseWhere(warehouseIds), ...period },
-        select: { id: true, items: { select: { quantity: true } } },
+        select: { id: true },
       }),
       prisma.min.findMany({
         where: { ...warehouseWhere(warehouseIds), ...period },
-        select: { id: true, items: { select: { quantity: true } } },
+        select: { id: true },
       }),
     ]);
- 
-    const totalInwardUnits = grns.reduce((sum, g) => sum + sumQuantity(g.items), 0);
-    const totalOutwardUnits = outwards.reduce((sum, o) => sum + sumQuantity(o.items), 0);
-    const totalTransactions = grns.length + outwards.length;
- 
-    // ---- documents pending, across this period's entries ----
-    const grnIds = grns.map((g) => g.id);
-    const outwardIds = outwards.map((o) => o.id);
+    const grnIds = grnRows.map((g) => g.id);
+    const outwardIds = outwardRows.map((o) => o.id);
  
     const [grnDocs, outwardDocs] = await Promise.all([
       grnIds.length

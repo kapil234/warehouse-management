@@ -10,6 +10,8 @@ const initialState = {
   list: [],
   listStatus: "idle", // idle | loading | succeeded | failed
   listError: null,
+  // Real server-side pagination - list only ever holds ONE page of rows.
+  listPagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 },
 
   // detail page
   current: null,
@@ -44,10 +46,21 @@ const initialState = {
 
 export const fetchOutwardList = createAsyncThunk(
   "outward/fetchList",
-  async ({ warehouseId } = {}, { rejectWithValue }) => {
+  async (
+    { warehouseId, search, type, dateFrom, dateTo, page = 1, pageSize = 20 } = {},
+    { rejectWithValue }
+  ) => {
     try {
       const { data } = await apiClient.get("/api/outward", {
-        params: warehouseId ? { warehouseId } : undefined,
+        params: {
+          ...(warehouseId ? { warehouseId } : {}),
+          ...(search ? { search } : {}),
+          ...(type ? { type } : {}),
+          ...(dateFrom ? { dateFrom } : {}),
+          ...(dateTo ? { dateTo } : {}),
+          page,
+          pageSize,
+        },
       });
 
       const entries = Array.isArray(data)
@@ -58,7 +71,7 @@ export const fetchOutwardList = createAsyncThunk(
         ? data.outwards
         : [];
 
-      return entries;
+      return { entries, pagination: data.pagination || null };
     } catch (err) {
       return rejectWithValue(
         err.response?.data?.message || "Failed to fetch outward entries"
@@ -283,7 +296,10 @@ const outwardSlice = createSlice({
       })
       .addCase(fetchOutwardList.fulfilled, (state, action) => {
         state.listStatus = "succeeded";
-        state.list = action.payload;
+        state.list = action.payload.entries;
+        if (action.payload.pagination) {
+          state.listPagination = action.payload.pagination;
+        }
       })
       .addCase(fetchOutwardList.rejected, (state, action) => {
         state.listStatus = "failed";
@@ -440,6 +456,7 @@ export const { clearCurrentOutward, resetOutwardCreateStatus } = outwardSlice.ac
 export const selectOutwardList = (state) => state.outward.list;
 export const selectOutwardListStatus = (state) => state.outward.listStatus;
 export const selectOutwardListError = (state) => state.outward.listError;
+export const selectOutwardListPagination = (state) => state.outward.listPagination;
 
 export const selectCurrentOutward = (state) => state.outward.current;
 export const selectOutwardDetailStatus = (state) => state.outward.detailStatus;

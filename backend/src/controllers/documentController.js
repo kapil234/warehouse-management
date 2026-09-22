@@ -2,20 +2,37 @@ import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog } from "../utils/auditLog.js";
  
+// assertLinkedEntryAccess used to be 3 sequential round-trips (entry, then
+// its warehouse, then the caller's warehouse access) plus a 4th one later
+// just to look up the entry's display number for the audit log - all on
+// the hot path of every single document upload/download/delete. The entry
+// + warehouse + entry number are fetched together here in one query, and
+// the access-grant check (still a separate query - Prisma can't filter an
+// arbitrary user's access as part of the same call) is skipped entirely
+// for SUPER_ADMIN, who bypasses it anyway.
 async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = null) {
   const model = linkedType === "grn" ? prisma.grn : prisma.min;
-  const entry = await model.findUnique({ where: { id: linkedId }, select: { id: true, warehouseId: true } });
-  if (!entry) throw Object.assign(new Error(`${linkedType === "grn" ? "GRN" : "Outward entry"} not found.`), { status: 404 });
- 
-  const warehouse = await prisma.warehouse.findUnique({
-    where: { id: entry.warehouseId },
-    select: { id: true, companyId: true, company: { select: { status: true } } },
+  const numberField = linkedType === "grn" ? "grnNumber" : "outwardNumber";
+
+  const entry = await model.findUnique({
+    where: { id: linkedId },
+    select: {
+      id: true,
+      warehouseId: true,
+      [numberField]: true,
+      warehouse: { select: { id: true, companyId: true, company: { select: { status: true } } } },
+    },
   });
+  if (!entry) throw Object.assign(new Error(`${linkedType === "grn" ? "GRN" : "Outward entry"} not found.`), { status: 404 });
+
+  const warehouse = entry.warehouse;
   if (!warehouse) throw Object.assign(new Error("Warehouse not found."), { status: 404 });
   if (warehouse.company?.status === "Inactive") throw Object.assign(new Error("This warehouse belongs to an inactive company."), { status: 403 });
- 
+
+  entry.entryNumber = entry[numberField] || entry.id;
+
   if (req.user.role === "SUPER_ADMIN") return entry;
- 
+
   const access = await prisma.warehouseAccess.findUnique({
     where: { userId_warehouseId: { userId: req.user.id, warehouseId: entry.warehouseId } },
   });
@@ -41,15 +58,6 @@ function baseName(category) {
 // "INWARD" / "OUTWARD" — keep the mapping in one place.
 const AUDIT_ENTITY_TYPE = { grn: "INWARD", outward: "OUTWARD" };
  
-async function getEntryNumber(linkedType, linkedId) {
-  if (linkedType === "grn") {
-    const grn = await prisma.grn.findUnique({ where: { id: linkedId }, select: { grnNumber: true } });
-    return grn?.grnNumber || linkedId;
-  }
-  const min = await prisma.min.findUnique({ where: { id: linkedId }, select: { outwardNumber: true } });
-  return min?.outwardNumber || linkedId;
-}
- 
 async function uploadLinkedDocument(req, res, linkedType) {
   try {
     if (!req.user?.id) return res.status(401).json({ message: "Unauthorized. Please login again." });
@@ -68,7 +76,7 @@ async function uploadLinkedDocument(req, res, linkedType) {
     const extension = cleanFileName.includes(".") ? cleanFileName.split(".").pop().toLowerCase() : "file";
  
     const prefix = linkedType === "grn" ? "GRN" : "MIN";
-    const entryNumber = await getEntryNumber(linkedType, id);
+    const entryNumber = entry.entryNumber;
     // Use a collision-proof suffix instead of a DB count: counting existing
     // docs and using count+1 is a read-then-write race when multiple files
     // are uploaded concurrently (as the frontend does via Promise.all), and
@@ -88,7 +96,11 @@ async function uploadLinkedDocument(req, res, linkedType) {
       data: { linkedType, linkedId: id, docCategory: category, fileKey: data.path, fileType, fileSize, uploadedById: req.user.id },
     });
  
-    await recordAuditLog(prisma, {
+    // The audit log write doesn't need to hold up the response - the upload
+    // already succeeded and the document row is already saved, so let the
+    // caller move on and finish logging in the background. Failures here
+    // are logged but never surfaced to the user, same as before.
+    recordAuditLog(prisma, {
       entityType: AUDIT_ENTITY_TYPE[linkedType],
       entityId: id,
       entityNumber: entryNumber,
@@ -97,7 +109,7 @@ async function uploadLinkedDocument(req, res, linkedType) {
       changes: { docCategory: category, fileName: originalName },
       userId: req.user.id,
       warehouseId: entry.warehouseId,
-    });
+    }).catch((err) => console.error("Audit log (DOCUMENT_ADDED) failed:", err));
  
     return res.status(201).json({ message: "Document uploaded successfully", data: { ...document, fileName: originalName } });
   } catch (error) {
@@ -131,17 +143,18 @@ export async function deleteDocument(req, res) {
     if (error) return res.status(500).json({ message: "Failed to delete file from storage.", error: error.message });
     await prisma.document.delete({ where: { id: document.id } });
  
-    const entryNumber = await getEntryNumber(document.linkedType, document.linkedId);
-    await recordAuditLog(prisma, {
+    // Same as upload: the delete already succeeded, so don't make the
+    // caller wait on the audit log write too.
+    recordAuditLog(prisma, {
       entityType: AUDIT_ENTITY_TYPE[document.linkedType],
       entityId: document.linkedId,
-      entityNumber: entryNumber,
+      entityNumber: entry.entryNumber,
       action: "DOCUMENT_REMOVED",
       description: `Document removed: ${document.docCategory}`,
       changes: { docCategory: document.docCategory },
       userId: req.user.id,
       warehouseId: entry.warehouseId,
-    });
+    }).catch((err) => console.error("Audit log (DOCUMENT_REMOVED) failed:", err));
  
     return res.json({ message: "Document deleted successfully." });
   } catch (error) {

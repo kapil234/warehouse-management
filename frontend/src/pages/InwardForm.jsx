@@ -36,6 +36,7 @@ import { getWarehousePermissions } from "../features/warehouse/warehousePermissi
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
 import useProducts from "../features/product/useProducts";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
+import PartyNameField from "../components/PartyNameField";
 
 /*
  * Inward form:
@@ -725,13 +726,15 @@ export default function InwardForm() {
 
             {/* Supplier / customer */}
             <div className="mt-4">
-              <label className={labelCls}>Supplier / Customer name</label>
-              <input
-                type="text"
+              <PartyNameField
                 value={supplierName}
-                onChange={(e) => setSupplierName(e.target.value)}
-                placeholder="Search or enter supplier"
-                className={inputCls}
+                onChange={setSupplierName}
+                storageKey="inward-supplier-names"
+                label="Supplier / Customer name"
+                labelCls={labelCls}
+                inputCls={inputCls}
+                placeholder="Enter supplier / customer name"
+                addLabel="+ Add new supplier / customer"
               />
             </div>
 
