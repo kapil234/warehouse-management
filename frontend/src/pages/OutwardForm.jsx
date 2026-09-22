@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Calendar, ChevronDown, Check, FileText, X, Upload, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Calendar, ChevronDown, Check, FileText, X, Upload, Download, Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
+import { toast } from "react-toastify";
 import {
   createOutward,
   updateOutward,
   fetchOutwardById,
   uploadOutwardDocument,
+  downloadOutwardDocument,
+  deleteOutwardDocument,
   resetOutwardCreateStatus,
   selectOutwardCreateStatus,
   selectOutwardUploadingDocs,
+  selectOutwardDocActionStatus,
 } from "../features/outward/outwardSlice";
 import { fetchWarehouses, selectWarehouses, selectSelectedWarehouse, setSelectedWarehouse } from "../features/warehouse/warehouseSlice";
 import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
@@ -29,10 +33,58 @@ const newItem = () => ({ id: makeId(), category: "", sku: "", quantity: "", uom:
 const newDoc = (type = "Invoice", name = "") => ({ id: makeId(), type, name, file: null });
 
 const DEFAULT_DOCS = [
-  newDoc("Delivery challan", "Delivery challan"),
-  newDoc("E-way bill", "E-way bill"),
-  newDoc("Dispatch photo", "Dispatch photo"),
+  { ...newDoc("Delivery challan", "Delivery challan"), isDefault: true },
+  { ...newDoc("E-way bill", "E-way bill"), isDefault: true },
+  { ...newDoc("Dispatch photo", "Dispatch photo"), isDefault: true },
 ];
+
+// Rebuilds the documents list: the three compulsory document slots always
+// come first (empty unless something was actually uploaded for them),
+// followed by any extra documents (custom "Other" entries or repeats of a
+// compulsory type added via "Add document"). Used when loading an existing
+// outward entry for edit, and mirrored by handleDeleteDocument so deleting
+// a compulsory document's upload never removes its slot - only extra
+// documents the user added are removed on delete.
+const buildDocumentRows = (existingDocs) => {
+  const docs = Array.isArray(existingDocs) ? existingDocs : [];
+  const usedIds = new Set();
+
+  const defaultRows = DEFAULT_DOCS.map((def) => {
+    const label = def.name.toLowerCase();
+    const match = docs.find(
+      (d) => !usedIds.has(d.id) && String(d.docCategory || "").trim().toLowerCase() === label
+    );
+    if (!match) {
+      return { id: makeId(), type: def.type, name: def.name, file: null, isDefault: true };
+    }
+    usedIds.add(match.id);
+    return {
+      id: match.id,
+      documentId: match.id,
+      type: def.type,
+      name: def.name,
+      file: null,
+      existing: true,
+      isDefault: true,
+      fileName: match.fileName || match.fileKey,
+    };
+  });
+
+  const extraRows = docs
+    .filter((d) => !usedIds.has(d.id))
+    .map((d) => ({
+      id: d.id,
+      documentId: d.id,
+      type: d.docCategory || "Other",
+      name: d.docCategory || "Document",
+      file: null,
+      existing: true,
+      isDefault: false,
+      fileName: d.fileName || d.fileKey,
+    }));
+
+  return [...defaultRows, ...extraRows];
+};
 
 export default function OutwardForm() {
   const navigate = useNavigate();
@@ -46,6 +98,7 @@ export default function OutwardForm() {
   const createStatus = useSelector(selectOutwardCreateStatus);
   const products = useProducts();
   const uploadingDocs = useSelector(selectOutwardUploadingDocs);
+  const docActionStatus = useSelector(selectOutwardDocActionStatus);
 
   const user = (() => { try { return JSON.parse(localStorage.getItem("user")); } catch { return null; } })();
   const [outwardDateTime, setOutwardDateTime] = useState(getDateTimeLocal);
@@ -108,7 +161,7 @@ export default function OutwardForm() {
     if (!editId) return;
     dispatch(fetchOutwardById(editId)).then((result) => {
       if (!fetchOutwardById.fulfilled.match(result)) {
-        alert(result.payload || "Unable to load outward entry.");
+        toast.error(result.payload || "Unable to load outward entry.");
         navigate("/outward");
         return;
       }
@@ -138,7 +191,7 @@ export default function OutwardForm() {
       setVehicleNumber(x.vehicleNumber || "");
       setRemarks(x.remarks || "");
       if (Array.isArray(x.documents) && x.documents.length) {
-        setDocuments(x.documents.map((d) => ({ id: d.id, type: d.docCategory || "Other", name: d.docCategory || "Document", file: null, existing: true, fileName: d.fileName || d.fileKey })));
+        setDocuments(buildDocumentRows(x.documents));
       }
     });
   }, [dispatch, editId, navigate]);
@@ -212,14 +265,105 @@ export default function OutwardForm() {
       if (!name?.trim()) return;
       name = name.trim();
     }
-    setDocuments((p) => [...p, newDoc(type, name)]);
+
+    // In edit mode, keep the name unique the same way the detail page does
+    // (append " #2", " #3", ...) so a second copy of an already-uploaded
+    // document doesn't collide with it.
+    let finalName = name;
+    if (isEdit) {
+      const label = name.toLowerCase();
+      const existingCount = documents.filter(
+        (d) => d.documentId && String(d.name || d.type || "").trim().toLowerCase().startsWith(label)
+      ).length;
+      finalName = existingCount > 0 ? `${name} #${existingCount + 1}` : name;
+    }
+
+    setDocuments((p) => [...p, newDoc(type, finalName)]);
     setShowDocumentMenu(false);
   };
-  const removeDocument = (id) => setDocuments((p) => p.filter((d) => d.id !== id));
+
+  const handleDownloadDocument = (documentId) => {
+    dispatch(downloadOutwardDocument({ documentId })).then((result) => {
+      if (downloadOutwardDocument.rejected.match(result)) {
+        toast.error(result.payload?.message || "Unable to download file.");
+      }
+    });
+  };
+
+  const handleDeleteDocument = (id) => {
+    const doc = documents.find((d) => d.id === id);
+    if (!doc) return;
+
+    // A compulsory document (Delivery challan / E-way bill / Dispatch
+    // photo) never disappears on delete - only its upload is cleared so
+    // the slot stays and can be uploaded to again. Only extra documents
+    // the user added (a duplicate or a custom "Other" one) are removed
+    // from the list entirely.
+    const clearOrRemove = () => {
+      if (doc.isDefault) {
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.id === id
+              ? { ...d, file: null, existing: false, documentId: undefined, fileName: undefined }
+              : d
+          )
+        );
+      } else {
+        setDocuments((prev) => prev.filter((d) => d.id !== id));
+      }
+    };
+
+    // Already saved to the server - delete it there too, with a confirmation
+    // since it can't be undone. A document that was only just added/selected
+    // locally (never uploaded) can be removed without asking.
+    if (doc.documentId) {
+      if (!window.confirm("Are you sure you want to delete this document?")) return;
+      dispatch(deleteOutwardDocument({ documentId: doc.documentId })).then((result) => {
+        if (deleteOutwardDocument.fulfilled.match(result)) {
+          clearOrRemove();
+          toast.success("Document deleted.");
+        } else {
+          toast.error(result.payload?.message || "Delete failed.");
+        }
+      });
+      return;
+    }
+
+    clearOrRemove();
+  };
+
   const handleDocumentUpload = (id, file) => {
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) return alert("File size must be less than 10 MB.");
-    if (!["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type)) return alert("Only PDF, JPG, PNG and WEBP files are allowed.");
+    if (file.size > 10 * 1024 * 1024) { toast.error("File size must be less than 10 MB."); return; }
+    if (!["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type)) { toast.error("Only PDF, JPG, PNG and WEBP files are allowed."); return; }
+
+    const doc = documents.find((d) => d.id === id);
+    if (!doc) return;
+
+    // Once the entry already exists (edit mode), upload right away instead of
+    // staging the file until the whole form is submitted - same behaviour as
+    // the detail page, and a slow/failed upload no longer blocks the rest of
+    // the edit.
+    if (isEdit && editId) {
+      const category = doc.name?.trim() || doc.type;
+      dispatch(uploadOutwardDocument({ outwardId: editId, file, docCategory: category })).then((result) => {
+        if (uploadOutwardDocument.fulfilled.match(result)) {
+          const uploaded = result.payload.document;
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.id === id
+                ? { ...d, file: null, existing: true, documentId: uploaded.id, fileName: uploaded.fileName || file.name }
+                : d
+            )
+          );
+          toast.success(`${category} uploaded.`);
+        } else {
+          toast.error(result.payload?.message || `${category} could not be uploaded.`);
+        }
+      });
+      return;
+    }
+
     updateDocument(id, { file });
   };
 
@@ -229,24 +373,24 @@ export default function OutwardForm() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!warehouseId) return alert("Please select a warehouse.");
-    if (operationBlocked || !permissions.canOutward) return alert("You do not have permission to create outward in this warehouse.");
-    if (!customerName.trim()) return alert("Please enter customer / recipient name.");
-    if (!companyName.trim()) return alert("Please enter company name.");
-    if (!refsPayload.length) return alert("Please enter at least one reference document number or E-way bill number.");
+    if (!warehouseId) return toast.error("Please select a warehouse.");
+    if (operationBlocked || !permissions.canOutward) return toast.error("You do not have permission to create outward in this warehouse.");
+    if (!customerName.trim()) return toast.error("Please enter customer / recipient name.");
+    if (!companyName.trim()) return toast.error("Please enter company name.");
+    if (!refsPayload.length) return toast.error("Please enter at least one reference document number or E-way bill number.");
     for (const item of items) {
-      if (!item.category) return alert("Please select a category for every item.");
-      if (!item.sku.trim()) return alert("Please select SKU / model for every item.");
-      if (Number(item.quantity) <= 0) return alert("Please enter a valid quantity for every item.");
-      if (!item.uom) return alert("Please select UOM for every item.");
+      if (!item.category) return toast.error("Please select a category for every item.");
+      if (!item.sku.trim()) return toast.error("Please select SKU / model for every item.");
+      if (Number(item.quantity) <= 0) return toast.error("Please enter a valid quantity for every item.");
+      if (!item.uom) return toast.error("Please select UOM for every item.");
     }
 
     // Can't dispatch more than is in stock. (The server checks again when saving.)
-    if (stockStatus !== "succeeded") return alert("Available stock hasn't loaded yet. Please wait a moment (or reload the page) and try again.");
+    if (stockStatus !== "succeeded") return toast.error("Available stock hasn't loaded yet. Please wait a moment (or reload the page) and try again.");
     for (const item of items) {
       const { available, uom } = availableFor(item.id, item.category, item.sku);
       if (Number(item.quantity) > available) {
-        return alert(
+        return toast.error(
           available <= 0
             ? `"${item.sku}" is out of stock in this warehouse.`
             : `Not enough stock for "${item.sku}": only ${available}${uom ? ` ${uom}` : ""} available for this item.`
@@ -276,11 +420,11 @@ export default function OutwardForm() {
     const result = isEdit
       ? await dispatch(updateOutward({ id: editId, payload }))
       : await dispatch(createOutward(payload));
-    if ((isEdit ? updateOutward.rejected.match(result) : createOutward.rejected.match(result))) return alert(result.payload?.message || "Failed to create outward entry.");
+    if ((isEdit ? updateOutward.rejected.match(result) : createOutward.rejected.match(result))) return toast.error(result.payload?.message || "Failed to create outward entry.");
     const created = result.payload?.data || result.payload;
     const outwardId = created?.id || editId;
     const outwardNumber = created?.outwardNumber || "Outward";
-    if (!outwardId) { alert("Outward created but ID was not returned."); navigate("/outward"); return; }
+    if (!outwardId) { toast.error("Outward created but ID was not returned."); navigate("/outward"); return; }
 
     const selected = documents.filter((d) => d.file && !d.existing && (d.type !== "Other" || d.name.trim()));
     const uploads = await Promise.all(selected.map((d) => {
@@ -289,9 +433,9 @@ export default function OutwardForm() {
     }));
     const failed = uploads.filter((r) => uploadOutwardDocument.rejected.match(r)).length;
     if (isEdit) {
-      alert(failed ? `${outwardNumber} updated. ${failed} document upload(s) failed.` : `${outwardNumber} updated successfully.`);
+      toast[failed ? "warning" : "success"](failed ? `${outwardNumber} updated. ${failed} document upload(s) failed.` : `${outwardNumber} updated successfully.`);
     } else {
-      alert(failed ? `${outwardNumber} created. ${failed} document upload(s) failed.` : `${outwardNumber} created successfully.`);
+      toast[failed ? "warning" : "success"](failed ? `${outwardNumber} created. ${failed} document upload(s) failed.` : `${outwardNumber} created successfully.`);
     }
     dispatch(resetOutwardCreateStatus());
     // replace (not push) so a successful save doesn't leave the edit
@@ -330,15 +474,18 @@ export default function OutwardForm() {
             </div>
             <div className="mt-4"><label className={labelCls}>Customer / Recipient name</label><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Search or enter customer" className={inputCls} /></div>
 
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-700">Reference documents</span>
+              <button type="button" onClick={addReference} className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Plus size={13} />Add document</button>
+            </div>
+            <div className="mt-2 space-y-4">
               {references.map((r, index) => (
                 <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                   {references.length > 1 && <div className="mb-3 flex items-center justify-between"><span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span><button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button></div>}
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div><label className={labelCls}>Reference doc type</label><div className="relative"><select value={r.refDocType} onChange={(e) => updateReference(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}><option>Invoice</option><option>E-way Bill</option><option>Delivery Challan</option><option>Return Note</option><option>Other</option></select><ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /></div></div>
                     <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
                     <div><label className={labelCls}>E-way bill number</label><input value={r.ewayBillNumber} onChange={(e) => updateReference(r.id, "ewayBillNumber", e.target.value)} placeholder="If above threshold" className={inputCls} /></div>
-                    <button type="button" onClick={addReference} className="flex h-[43px] items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-4 text-sm font-semibold text-blue-700 hover:bg-blue-50"><Plus size={16} />Add document</button>
                   </div>
                 </div>
               ))}
@@ -411,15 +558,62 @@ export default function OutwardForm() {
               </div>
             </div>
             <div className="space-y-4">
-              {documents.map((doc) => (
-                <div key={doc.id} className="flex min-h-[104px] items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white px-5 py-4">
-                  <div className="flex min-w-0 items-center gap-5">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gray-100"><FileText size={28} strokeWidth={1.7} className="text-gray-400" /></div>
-                    <div className="min-w-0"><p className="text-base font-semibold text-gray-900 md:text-lg">{doc.name || doc.type}</p>{doc.file && <p className="mt-1 truncate text-xs text-green-600">Uploaded: {doc.file.name}</p>}</div>
+              {documents.map((doc) => {
+                const rowUploading = uploadingDocs?.[doc.name] || uploadingDocs?.[doc.type];
+                const rowDeleting = doc.documentId && docActionStatus[doc.documentId] === "deleting";
+                const rowDownloading = doc.documentId && docActionStatus[doc.documentId] === "downloading";
+
+                return (
+                  <div key={doc.id} className="flex min-h-[104px] flex-col gap-3 rounded-2xl border border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-5">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gray-100"><FileText size={28} strokeWidth={1.7} className="text-gray-400" /></div>
+                      <div className="min-w-0">
+                        <p className="text-base font-semibold text-gray-900 md:text-lg">{doc.name || doc.type}</p>
+                        {doc.file && <p className="mt-1 truncate text-xs text-green-600">Selected: {doc.file.name}</p>}
+                        {doc.existing && !doc.file && <p className="mt-1 truncate text-xs text-gray-500">{doc.fileName || "Uploaded"}</p>}
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <label className="flex h-12 cursor-pointer items-center gap-2 rounded-xl border border-blue-300 bg-white px-4 text-sm font-semibold text-blue-700 hover:bg-blue-50">
+                        <Upload size={18} />
+                        {rowUploading ? "Uploading..." : doc.existing || doc.file ? "Replace" : "Upload document"}
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept=".pdf,.jpg,.jpeg,.png,.webp"
+                          disabled={createStatus === "loading" || rowUploading}
+                          onChange={(e) => { handleDocumentUpload(doc.id, e.target.files?.[0]); e.target.value = ""; }}
+                        />
+                      </label>
+
+                      {doc.documentId && (
+                        <button
+                          type="button"
+                          title="Download"
+                          disabled={rowDownloading}
+                          onClick={() => handleDownloadDocument(doc.documentId)}
+                          className="flex h-12 items-center justify-center rounded-xl border border-gray-200 px-3 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          <Download size={18} />
+                        </button>
+                      )}
+
+                      {(doc.file || doc.existing) && (
+                        <button
+                          type="button"
+                          title="Delete"
+                          disabled={rowDeleting}
+                          onClick={() => handleDeleteDocument(doc.id)}
+                          className="flex h-12 items-center justify-center rounded-xl border border-red-200 px-3 text-red-500 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <label className="flex h-12 shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-blue-300 bg-white px-5 text-sm font-semibold text-blue-700 hover:bg-blue-50"><Upload size={19} />{doc.file ? "Change document" : "Upload document"}<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={createStatus === "loading"} onChange={(e) => { handleDocumentUpload(doc.id, e.target.files?.[0]); e.target.value = ""; }} /></label>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 

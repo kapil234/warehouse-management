@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
+import { toast } from "react-toastify";
 import {
   fetchInwardById,
   uploadInwardDocument,
@@ -94,22 +95,22 @@ export default function InwardDetail() {
 
     const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
     if (!allowedTypes.includes(file.type)) {
-      alert("Only PDF, JPG, PNG and WEBP files are allowed.");
+      toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
       event.target.value = "";
       return;
     }
 
     if (file.size > 10 * 1024 * 1024) {
-      alert("Maximum file size is 10 MB.");
+      toast.error("Maximum file size is 10 MB.");
       event.target.value = "";
       return;
     }
 
     dispatch(uploadInwardDocument({ grnId: id, file, docCategory })).then((result) => {
       if (uploadInwardDocument.fulfilled.match(result)) {
-        alert(`${docCategory} uploaded successfully.`);
+        toast.success(`${docCategory} uploaded successfully.`);
       } else {
-        alert(result.payload?.message || "Upload failed.");
+        toast.error(result.payload?.message || "Upload failed.");
       }
     });
 
@@ -147,28 +148,28 @@ export default function InwardDetail() {
 
   const handleDownload = (documentId) => {
     if (!documentId) {
-      alert("Document ID is missing.");
+      toast.error("Document ID is missing.");
       return;
     }
     dispatch(downloadInwardDocument({ documentId })).then((result) => {
       if (downloadInwardDocument.rejected.match(result)) {
-        alert(result.payload?.message || "Unable to download file.");
+        toast.error(result.payload?.message || "Unable to download file.");
       }
     });
   };
 
   const handleDelete = (documentId) => {
     if (!documentId) {
-      alert("Document ID is missing.");
+      toast.error("Document ID is missing.");
       return;
     }
     if (!window.confirm("Are you sure you want to delete this document?")) return;
 
     dispatch(deleteInwardDocument({ documentId })).then((result) => {
       if (deleteInwardDocument.fulfilled.match(result)) {
-        alert("Document deleted successfully.");
+        toast.success("Document deleted successfully.");
       } else {
-        alert(result.payload?.message || "Delete failed.");
+        toast.error(result.payload?.message || "Delete failed.");
       }
     });
   };

@@ -7,19 +7,24 @@ import {
   FileText,
   X,
   Upload,
+  Download,
   Plus,
   Trash2,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
+import { toast } from "react-toastify";
 import {
   createInward,
   updateInward,
   fetchInwardById,
   uploadInwardDocument,
+  downloadInwardDocument,
+  deleteInwardDocument,
   resetCreateStatus,
   selectCreateStatus,
   selectUploadingDocs,
+  selectDocActionStatus,
 } from "../features/inward/inwardSlice";
 import {
   fetchWarehouses,
@@ -51,10 +56,58 @@ const DEFAULT_REFERENCE = () => ({
 });
 
 const DEFAULT_DOCUMENTS = [
-  { id: crypto.randomUUID(), type: "Invoice", name: "Vendor invoice", file: null },
-  { id: crypto.randomUUID(), type: "E-way Bill", name: "E-way bill", file: null },
-  { id: crypto.randomUUID(), type: "Other", name: "Unloading sign-off sheet", file: null },
+  { id: crypto.randomUUID(), type: "Invoice", name: "Vendor invoice", file: null, isDefault: true },
+  { id: crypto.randomUUID(), type: "E-way Bill", name: "E-way bill", file: null, isDefault: true },
+  { id: crypto.randomUUID(), type: "Other", name: "Unloading sign-off sheet", file: null, isDefault: true },
 ];
+
+// Rebuilds the documents list for the form: the three compulsory document
+// slots always come first (empty unless something was actually uploaded
+// for them), followed by any extra documents (custom "Other" entries or
+// repeats of a compulsory type added via "Add document"). Used both when
+// loading an existing GRN for edit and is mirrored by handleDeleteDocument
+// so deleting a compulsory document's upload never removes its slot -
+// only extra documents the user added are removed on delete.
+const buildDocumentRows = (existingDocs) => {
+  const docs = Array.isArray(existingDocs) ? existingDocs : [];
+  const usedIds = new Set();
+
+  const defaultRows = DEFAULT_DOCUMENTS.map((def) => {
+    const label = def.name.toLowerCase();
+    const match = docs.find(
+      (d) => !usedIds.has(d.id) && String(d.docCategory || "").trim().toLowerCase() === label
+    );
+    if (!match) {
+      return { id: crypto.randomUUID(), type: def.type, name: def.name, file: null, isDefault: true };
+    }
+    usedIds.add(match.id);
+    return {
+      id: match.id,
+      documentId: match.id,
+      type: def.type,
+      name: def.name,
+      file: null,
+      existing: true,
+      isDefault: true,
+      fileName: match.fileName || match.fileKey,
+    };
+  });
+
+  const extraRows = docs
+    .filter((d) => !usedIds.has(d.id))
+    .map((d) => ({
+      id: d.id,
+      documentId: d.id,
+      type: d.docCategory || "Other",
+      name: d.docCategory || "Document",
+      file: null,
+      existing: true,
+      isDefault: false,
+      fileName: d.fileName || d.fileKey,
+    }));
+
+  return [...defaultRows, ...extraRows];
+};
 
 const createItem = () => ({
   id: crypto.randomUUID(),
@@ -95,6 +148,7 @@ export default function InwardForm() {
   const companies = useSelector(selectAllCompanies);
   const createStatus = useSelector(selectCreateStatus);
   const uploadingDocs = useSelector(selectUploadingDocs);
+  const docActionStatus = useSelector(selectDocActionStatus);
   const products = useProducts();
 
   const user = (() => {
@@ -169,7 +223,7 @@ export default function InwardForm() {
     if (!editId) return;
     dispatch(fetchInwardById(editId)).then((result) => {
       if (!fetchInwardById.fulfilled.match(result)) {
-        alert(result.payload || "Unable to load inward entry.");
+        toast.error(result.payload || "Unable to load inward entry.");
         navigate("/inward");
         return;
       }
@@ -196,7 +250,7 @@ export default function InwardForm() {
       setItems((x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
       setRemarks(x.remarks || "");
       if (Array.isArray(x.documents) && x.documents.length) {
-        setDocuments(x.documents.map((d) => ({ id: d.id, type: d.docCategory || "Other", name: d.docCategory || "Document", file: null, existing: true, fileName: d.fileName || d.fileKey })));
+        setDocuments(buildDocumentRows(x.documents));
       }
     });
   }, [dispatch, editId, navigate]);
@@ -237,7 +291,7 @@ export default function InwardForm() {
     if (!file) return;
 
     if (file.size > 10 * 1024 * 1024) {
-      alert("File size must be less than 10 MB.");
+      toast.error("File size must be less than 10 MB.");
       return;
     }
 
@@ -249,7 +303,34 @@ export default function InwardForm() {
     ];
 
     if (!allowedTypes.includes(file.type)) {
-      alert("Only PDF, JPG, PNG and WEBP files are allowed.");
+      toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
+      return;
+    }
+
+    const doc = documents.find((d) => d.id === id);
+    if (!doc) return;
+
+    // Once the GRN already exists (edit mode), upload right away instead of
+    // staging the file until the whole form is submitted - same behaviour
+    // as the detail page, and a slow/failed upload no longer blocks the
+    // rest of the edit.
+    if (isEdit && editId) {
+      const category = doc.name?.trim() || doc.type;
+      dispatch(uploadInwardDocument({ grnId: editId, file, docCategory: category })).then((result) => {
+        if (uploadInwardDocument.fulfilled.match(result)) {
+          const uploaded = result.payload.document;
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.id === id
+                ? { ...d, file: null, existing: true, documentId: uploaded.id, fileName: uploaded.fileName || file.name }
+                : d
+            )
+          );
+          toast.success(`${category} uploaded.`);
+        } else {
+          toast.error(result.payload?.message || `${category} could not be uploaded.`);
+        }
+      });
       return;
     }
 
@@ -277,15 +358,74 @@ export default function InwardForm() {
     }
 
     const normalizedType = type === "Vendor invoice" ? "Invoice" : type === "E-way bill" ? "E-way Bill" : type;
+
+    // In edit mode, keep the name unique the same way the detail page does
+    // (append " #2", " #3", ...) so a second copy of an already-uploaded
+    // document doesn't collide with it.
+    let finalName = name;
+    if (isEdit) {
+      const label = name.toLowerCase();
+      const existingCount = documents.filter(
+        (d) => d.documentId && String(d.name || d.type || "").trim().toLowerCase().startsWith(label)
+      ).length;
+      finalName = existingCount > 0 ? `${name} #${existingCount + 1}` : name;
+    }
+
     setDocuments((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), type: normalizedType, name, file: null },
+      { id: crypto.randomUUID(), type: normalizedType, name: finalName, file: null },
     ]);
     setShowDocumentMenu(false);
   };
 
-  const removeDocument = (id) => {
-    setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+  const handleDownloadDocument = (documentId) => {
+    dispatch(downloadInwardDocument({ documentId })).then((result) => {
+      if (downloadInwardDocument.rejected.match(result)) {
+        toast.error(result.payload?.message || "Unable to download file.");
+      }
+    });
+  };
+
+  const handleDeleteDocument = (id) => {
+    const doc = documents.find((d) => d.id === id);
+    if (!doc) return;
+
+    // A compulsory document (Vendor invoice / E-way bill / Unloading
+    // sign-off sheet) never disappears on delete - only its upload is
+    // cleared so the slot stays and can be uploaded to again. Only extra
+    // documents the user added (a duplicate or a custom "Other" one) are
+    // removed from the list entirely.
+    const clearOrRemove = () => {
+      if (doc.isDefault) {
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.id === id
+              ? { ...d, file: null, existing: false, documentId: undefined, fileName: undefined }
+              : d
+          )
+        );
+      } else {
+        setDocuments((prev) => prev.filter((d) => d.id !== id));
+      }
+    };
+
+    // Already saved to the server - delete it there too, with a confirmation
+    // since it can't be undone. A document that was only just added/selected
+    // locally (never uploaded) can be removed without asking.
+    if (doc.documentId) {
+      if (!window.confirm("Are you sure you want to delete this document?")) return;
+      dispatch(deleteInwardDocument({ documentId: doc.documentId })).then((result) => {
+        if (deleteInwardDocument.fulfilled.match(result)) {
+          clearOrRemove();
+          toast.success("Document deleted.");
+        } else {
+          toast.error(result.payload?.message || "Delete failed.");
+        }
+      });
+      return;
+    }
+
+    clearOrRemove();
   };
 
   const updateItem = (id, field, value) => {
@@ -343,51 +483,51 @@ export default function InwardForm() {
     e.preventDefault();
 
     if (!supplierName.trim()) {
-      alert("Please enter supplier / customer name.");
+      toast.error("Please enter supplier / customer name.");
       return;
     }
 
     if (!selectedCompanyId || !companyName.trim()) {
-      alert("Please select a company.");
+      toast.error("Please select a company.");
       return;
     }
 
     if (!referenceDocuments[0]?.refDocNumber.trim()) {
-      alert("Please enter reference document number.");
+      toast.error("Please enter reference document number.");
       return;
     }
 
     for (const item of items) {
       if (!item.category) {
-        alert("Please select a category for every item.");
+        toast.error("Please select a category for every item.");
         return;
       }
 
       if (!item.sku.trim()) {
-        alert("Please select SKU / model for every item.");
+        toast.error("Please select SKU / model for every item.");
         return;
       }
 
       if (!item.quantity || Number(item.quantity) <= 0) {
-        alert("Please enter a valid quantity for every item.");
+        toast.error("Please enter a valid quantity for every item.");
         return;
       }
     }
 
     if (!warehouseId) {
-      alert("Please select a warehouse for the selected company.");
+      toast.error("Please select a warehouse for the selected company.");
       return;
     }
 
     if (operationBlocked) {
-      alert(
+      toast.error(
         "This warehouse inward operation is inactive because the company or warehouse operation is inactive."
       );
       return;
     }
 
     if (!permissions.canInward) {
-      alert(
+      toast.error(
         "You do not have permission to create this inward entry in the selected warehouse."
       );
       return;
@@ -433,14 +573,14 @@ export default function InwardForm() {
       const err = result.payload || {};
 
       if (err.status === 403) {
-        alert(err.message || "You are not authorized to create an inward entry.");
+        toast.error(err.message || "You are not authorized to create an inward entry.");
       } else if (err.status === 422) {
-        alert(err.message || "Please check the form details.");
+        toast.error(err.message || "Please check the form details.");
         console.log("Validation errors:", err.errors);
       } else if (err.status === 409) {
-        alert(err.message || "The inward entry conflicts with existing data.");
+        toast.error(err.message || "The inward entry conflicts with existing data.");
       } else {
-        alert(err.message || "Failed to create inward entry.");
+        toast.error(err.message || "Failed to create inward entry.");
       }
       return;
     }
@@ -454,7 +594,7 @@ export default function InwardForm() {
       (isEdit ? `GRN ${editId}` : "");
 
     if (!grnId) {
-      alert("GRN created but GRN ID was not returned by the server.");
+      toast.error("GRN created but GRN ID was not returned by the server.");
       dispatch(resetCreateStatus());
       navigate("/inward");
       return;
@@ -486,16 +626,16 @@ export default function InwardForm() {
       ).length;
 
       if (failedCount > 0) {
-        alert(
+        toast.warning(
           isEdit
-            ? `GRN ${grnNumber} updated successfully. Some documents could not be uploaded.`
-            : `GRN ${grnNumber} created successfully. Some documents could not be uploaded.`
+            ? `GRN ${grnNumber} updated. Some documents could not be uploaded.`
+            : `GRN ${grnNumber} created. Some documents could not be uploaded.`
         );
       } else {
-        alert(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
+        toast.success(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
       }
     } else {
-      alert(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
+      toast.success(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
     }
 
     dispatch(resetCreateStatus());
@@ -596,7 +736,18 @@ export default function InwardForm() {
             </div>
 
             {/* Reference documents */}
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-700">Reference documents</span>
+              <button
+                type="button"
+                onClick={addReferenceDocument}
+                className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+              >
+                <Plus size={13} />
+                Add document
+              </button>
+            </div>
+            <div className="mt-2 space-y-4">
               {referenceDocuments.map((reference, index) => (
                 <div
                   key={reference.id}
@@ -623,7 +774,7 @@ export default function InwardForm() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div>
                       <label className={labelCls}>Reference doc type</label>
                       <div className="relative">
@@ -684,15 +835,6 @@ export default function InwardForm() {
                         className={inputCls}
                       />
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={addReferenceDocument}
-                      className="flex h-[43px] items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-4 text-sm font-semibold text-blue-700 hover:bg-blue-50"
-                    >
-                      <Plus size={16} />
-                      Add document
-                    </button>
                   </div>
                 </div>
               ))}
@@ -835,36 +977,71 @@ export default function InwardForm() {
             </div>
 
             <div className="space-y-4">
-              {documents.map((doc) => (
-                <div key={doc.id} className="flex min-h-[104px] items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white px-5 py-4">
-                  <div className="flex min-w-0 items-center gap-5">
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gray-100">
-                      <FileText size={28} strokeWidth={1.7} className="text-gray-400" />
+              {documents.map((doc) => {
+                const rowUploading = uploadingDocs?.[doc.name] || uploadingDocs?.[doc.type];
+                const rowDeleting = doc.documentId && docActionStatus[doc.documentId] === "deleting";
+                const rowDownloading = doc.documentId && docActionStatus[doc.documentId] === "downloading";
+
+                return (
+                  <div key={doc.id} className="flex min-h-[104px] flex-col gap-3 rounded-2xl border border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-5">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gray-100">
+                        <FileText size={28} strokeWidth={1.7} className="text-gray-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-base font-semibold text-gray-900 md:text-lg">{doc.name || doc.type}</p>
+                        {doc.file && (
+                          <p className="mt-1 truncate text-xs text-green-600">Selected: {doc.file.name}</p>
+                        )}
+                        {doc.existing && !doc.file && (
+                          <p className="mt-1 truncate text-xs text-gray-500">{doc.fileName || "Uploaded"}</p>
+                        )}
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-base font-semibold text-gray-900 md:text-lg">{doc.name || doc.type}</p>
-                      {doc.file && (
-                        <p className="mt-1 truncate text-xs text-green-600">Uploaded: {doc.file.name}</p>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <label className="flex h-12 cursor-pointer items-center gap-2 rounded-xl border border-blue-300 bg-white px-4 text-sm font-semibold text-blue-700 hover:bg-blue-50">
+                        <Upload size={18} />
+                        {rowUploading ? "Uploading..." : doc.existing || doc.file ? "Replace" : "Upload document"}
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept=".pdf,.jpg,.jpeg,.png,.webp"
+                          disabled={submitting || rowUploading}
+                          onChange={(e) => {
+                            handleDocumentUpload(doc.id, e.target.files?.[0]);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+
+                      {doc.documentId && (
+                        <button
+                          type="button"
+                          title="Download"
+                          disabled={rowDownloading}
+                          onClick={() => handleDownloadDocument(doc.documentId)}
+                          className="flex h-12 items-center justify-center rounded-xl border border-gray-200 px-3 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          <Download size={18} />
+                        </button>
+                      )}
+
+                      {(doc.file || doc.existing) && (
+                        <button
+                          type="button"
+                          title="Delete"
+                          disabled={rowDeleting}
+                          onClick={() => handleDeleteDocument(doc.id)}
+                          className="flex h-12 items-center justify-center rounded-xl border border-red-200 px-3 text-red-500 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          <Trash2 size={18} />
+                        </button>
                       )}
                     </div>
                   </div>
-
-                  <label className="flex h-12 shrink-0 cursor-pointer items-center gap-2 rounded-xl border border-blue-300 bg-white px-5 text-sm font-semibold text-blue-700 hover:bg-blue-50">
-                    <Upload size={19} />
-                    {doc.file ? "Change document" : "Upload document"}
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept=".pdf,.jpg,.jpeg,.png,.webp"
-                      disabled={submitting}
-                      onChange={(e) => {
-                        handleDocumentUpload(doc.id, e.target.files?.[0]);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
