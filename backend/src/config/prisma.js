@@ -1,14 +1,20 @@
 import prismaPackage from '@prisma/client';
-
+ 
 const { PrismaClient } = prismaPackage;
-
+ 
 // Reuse a single Prisma instance across the app (important in dev with hot-reload,
 // where re-importing this file shouldn't open a new DB connection each time)
 const prisma =
   global.prisma ||
-  new PrismaClient({ log: [{ emit: 'event', level: 'query' }] });
+  new PrismaClient({
+    log: [{ emit: 'event', level: 'query' }],
+    // Default is maxWait 2000ms / timeout 5000ms, which a slow (remote) database
+    // easily exceeds -> "Transaction already closed" (P2028). Applies to every
+    // prisma.$transaction(async tx => ...) in the app.
+    transactionOptions: { maxWait: 10000, timeout: 30000 },
+  });
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
-
+ 
 // Print any database query slower than SLOW_QUERY_MS (default 500ms) so it is
 // easy to see what is making a page slow. Only the SQL text is printed - never
 // the parameter values. Set SLOW_QUERY_MS=0 to turn this off.
@@ -21,5 +27,5 @@ if (SLOW_QUERY_MS > 0 && typeof prisma.$on === 'function' && !prisma.__slowQuery
     }
   });
 }
-
+ 
 export default prisma;
