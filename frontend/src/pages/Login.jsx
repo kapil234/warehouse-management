@@ -133,7 +133,7 @@ export default function Login() {
         </form>
 
         <p className="text-center text-xs text-gray-500 mt-5">
-          Access is role-based — Warehouse Manager or Admin
+          Access is role-based — Admin, Sales, Account or Warehouse Manager
         </p>
         <p className="text-center text-sm mt-2">
           Don't have an account?{" "}

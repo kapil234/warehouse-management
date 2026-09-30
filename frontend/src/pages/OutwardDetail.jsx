@@ -1,35 +1,41 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Download,
-  Trash2,
-  Upload,
-  FileText,
   Loader2,
   Truck,
   Calendar,
   User,
   Hash,
   Route,
-  Plus,
+  Check,
+  X,
+  Paperclip,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "react-toastify";
 import {
   fetchOutwardById,
-  uploadOutwardDocument,
-  downloadOutwardDocument,
-  deleteOutwardDocument,
+  approveOutward,
+  rejectOutward,
+  downloadItemProof,
   clearCurrentOutward,
   selectCurrentOutward,
   selectOutwardDetailStatus,
   selectOutwardDetailError,
-  selectOutwardDocActionStatus,
-  selectOutwardUploadingDocs,
 } from "../features/outward/outwardSlice";
-import { REQUIRED_DOCUMENTS } from "../features/outward/outwardHelpers";
+import {
+  REQUIRED_DOCUMENTS,
+  WORKFLOW_STATUS,
+  DISPATCH_STATE,
+  costStatusLabel,
+  formatMoney,
+  isPlaceholder,
+} from "../features/outward/outwardHelpers";
 import { downloadOutwardPdf } from "../features/outward/outwardPdf";
+import OutwardDocuments from "../components/OutwardDocuments";
 
 export default function OutwardDetail() {
   const navigate = useNavigate();
@@ -39,102 +45,70 @@ export default function OutwardDetail() {
   const outward = useSelector(selectCurrentOutward);
   const detailStatus = useSelector(selectOutwardDetailStatus);
   const error = useSelector(selectOutwardDetailError);
-  const docActionStatus = useSelector(selectOutwardDocActionStatus);
-  const uploadingDocs = useSelector(selectOutwardUploadingDocs);
 
-  const loading = detailStatus === "loading";
+  const loading = detailStatus === "loading" || detailStatus === "idle";
 
-  const [showDocumentMenu, setShowDocumentMenu] = useState(false);
-  const pendingCategoryRef = useRef(null);
-  const addDocInputRef = useRef(null);
+  const user = (() => { try { return JSON.parse(localStorage.getItem("user")); } catch { return null; } })();
+  const role = user?.role;
+  const isSuperAdmin = role === "SUPER_ADMIN";
+  const isSales = role === "SALES";
+  const isAccount = role === "ACCOUNT";
+  const isWarehouse = role === "WAREHOUSE_MANAGER";
+
+  // Account's approve / reject dialog: null | "approve" | "reject"
+  const [decision, setDecision] = useState(null);
+  const [decisionRemarks, setDecisionRemarks] = useState("");
+  const [deciding, setDeciding] = useState(false);
 
   useEffect(() => {
     if (id) dispatch(fetchOutwardById(id));
     return () => dispatch(clearCurrentOutward());
   }, [dispatch, id]);
 
-  const handleUpload = (event, docCategory) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  // Super admin never stays on this page for an approved entry that is waiting for dispatch:
+  // it goes straight to the dispatch form (sales info, Update, Reject and the dispatch fields).
+  useEffect(() => {
+    if (
+      isSuperAdmin &&
+      detailStatus === "succeeded" &&
+      outward?.id === id &&
+      outward.workflowStatus === "PENDING_DISPATCH"
+    ) {
+      navigate(`/outward/${id}/dispatch`, { replace: true });
+    }
+  }, [isSuperAdmin, detailStatus, outward, id, navigate]);
 
-    const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
-    if (!allowedTypes.includes(file.type)) {
-      toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
-      event.target.value = "";
+  const openDecision = (type) => {
+    setDecisionRemarks("");
+    setDecision(type);
+  };
+
+  const submitDecision = async () => {
+    if (decision === "reject" && !decisionRemarks.trim()) {
+      toast.error("Please give a reason for rejecting.");
       return;
     }
-
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("Maximum file size is 10 MB.");
-      event.target.value = "";
-      return;
-    }
-
-    dispatch(uploadOutwardDocument({ outwardId: id, file, docCategory })).then((result) => {
-      if (uploadOutwardDocument.fulfilled.match(result)) {
-        toast.success(`${docCategory} uploaded successfully.`);
-      } else {
-        toast.error(result.payload?.message || "Upload failed.");
+    setDeciding(true);
+    const action = decision === "approve" ? approveOutward : rejectOutward;
+    const result = await dispatch(action({ id, remarks: decisionRemarks.trim() || undefined }));
+    setDeciding(false);
+    if (action.fulfilled.match(result)) {
+      toast.success(result.payload?.message || (decision === "approve" ? "Approved." : "Rejected."));
+      setDecision(null);
+      // Super admin: after approving, go straight on to the dispatch details.
+      if (decision === "approve" && isSuperAdmin) {
+        navigate(`/outward/${id}/dispatch`, { replace: true });
+        return;
       }
-    });
-
-    event.target.value = "";
-  };
-
-  // Add document menu — lets the user pick one of the three known
-  // document types (to attach a 2nd/3rd copy of it) or "Other" for a
-  // custom-named document. Picking a type immediately opens the file
-  // picker for it; the chosen file uploads as soon as it's selected,
-  // landing in the unified document list below as its own row.
-  const handleAddDocumentClick = (type, documents) => {
-    setShowDocumentMenu(false);
-
-    let label = type;
-    if (type === "Other") {
-      const name = window.prompt("Enter document name");
-      if (!name?.trim()) return;
-      label = name.trim();
+      dispatch(fetchOutwardById(id));
+    } else {
+      toast.error(result.payload || "Something went wrong.");
     }
-
-    const existingCount = documents.filter((doc) =>
-      String(doc.docCategory || "").trim().toLowerCase().startsWith(label.toLowerCase())
-    ).length;
-
-    pendingCategoryRef.current = existingCount > 0 ? `${label} #${existingCount + 1}` : label;
-    addDocInputRef.current?.click();
   };
 
-  const handlePendingUpload = (event) => {
-    const category = pendingCategoryRef.current;
-    if (!category) return;
-    handleUpload(event, category);
-  };
-
-  const handleDownload = (documentId) => {
-    if (!documentId) {
-      toast.error("Document ID is missing.");
-      return;
-    }
-    dispatch(downloadOutwardDocument({ documentId })).then((result) => {
-      if (downloadOutwardDocument.rejected.match(result)) {
-        toast.error(result.payload?.message || "Unable to download file.");
-      }
-    });
-  };
-
-  const handleDelete = (documentId) => {
-    if (!documentId) {
-      toast.error("Document ID is missing.");
-      return;
-    }
-    if (!window.confirm("Are you sure you want to delete this document?")) return;
-
-    dispatch(deleteOutwardDocument({ documentId })).then((result) => {
-      if (deleteOutwardDocument.fulfilled.match(result)) {
-        toast.success("Document deleted successfully.");
-      } else {
-        toast.error(result.payload?.message || "Delete failed.");
-      }
+  const handleViewProof = (itemId) => {
+    dispatch(downloadItemProof({ outwardId: id, itemId })).then((result) => {
+      if (downloadItemProof.rejected.match(result)) toast.error(result.payload || "Unable to open the proof file.");
     });
   };
 
@@ -145,6 +119,16 @@ export default function OutwardDetail() {
           <Loader2 className="w-6 h-6 animate-spin" />
           Loading outward details...
         </div>
+      </div>
+    );
+  }
+
+  // Super admin + approved entry waiting for dispatch: the redirect to the dispatch form is on its
+  // way (see the effect above). Show the same loader instead of flashing this page for a moment.
+  if (isSuperAdmin && outward?.workflowStatus === "PENDING_DISPATCH") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
       </div>
     );
   }
@@ -165,6 +149,33 @@ export default function OutwardDetail() {
 
   const documents = outward.documents || [];
   const items = outward.items || [];
+
+  // Warehouse managers only get "Pending" / "Dispatched" (dispatchState);
+  // everyone else gets the real workflow status.
+  const workflow = outward.workflowStatus;
+  const dispatched = isWarehouse ? outward.dispatchState === "Dispatched" : workflow === "DISPATCHED";
+  const awaitingDispatch = isWarehouse ? outward.dispatchState === "Pending" : workflow === "PENDING_DISPATCH";
+  const showCost = !isWarehouse;
+  // Until dispatch: Sales can edit, Account can reject. After dispatch Sales / Account / Warehouse are locked out;
+  // the Super admin's Update button does everything (sales info, cost, items and dispatch details);
+  // the warehouse manager can still update the dispatch details, documents and vehicle number.
+  // Sales can view entries the super admin created for their company, but only edit their own.
+  const canEdit = isSuperAdmin || (isSales && outward.createdBy?.role !== "SUPER_ADMIN" && ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(workflow));
+  const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED"].includes(workflow);
+  const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
+  const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));
+  // Documents: add / upload / replace / delete for the warehouse manager (before and after dispatch)
+  // and for the Super admin. Sales / Account never see the section for editing.
+  const canManageDocs = isSuperAdmin || isWarehouse;
+  // The super admin does not see the documents section at the approval stage;
+  // it appears with the dispatch details and stays after dispatch.
+  const docsStage = !isSuperAdmin || awaitingDispatch || dispatched;
+  // The documents section is always on the detail page (empty state when nothing is uploaded).
+  // Sales / Account get it once dispatched; the admin from dispatch details onwards; the warehouse manager always.
+  // Sales / Account only see their own part, never the documents or dispatch details.
+  const showDocuments = docsStage && (isSuperAdmin || isWarehouse);
+  const showDispatchInfo = isWarehouse || (isSuperAdmin && dispatched);
+  const statusStyle = isWarehouse ? DISPATCH_STATE[outward.dispatchState] : WORKFLOW_STATUS[workflow];
 
   const uploadedCategories = documents.map((doc) => String(doc.docCategory || "").trim().toLowerCase());
   const allDocumentsUploaded = REQUIRED_DOCUMENTS.every((requiredDocument) => {
@@ -205,7 +216,7 @@ export default function OutwardDetail() {
   const referenceDocumentRows =
     Array.isArray(outward.referenceDocuments) && outward.referenceDocuments.length
       ? outward.referenceDocuments
-      : outward.refDocNumber
+      : !isPlaceholder(outward.refDocNumber)
       ? [{ id: "ref-1", refDocType: outward.refDocType, refDocNumber: outward.refDocNumber, ewayBillNumber: outward.ewayBillNumber }]
       : [];
 
@@ -224,18 +235,32 @@ export default function OutwardDetail() {
               <p className="text-xs text-gray-500 mt-0.5 sm:text-base sm:mt-1">{outward.outwardNumber || `Outward #${outward.id}`}</p>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
-              <button type="button" onClick={() => downloadOutwardPdf(outward, items, documentRows, currentStatus)} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /> Download</button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {canApprove && (
+                <button type="button" onClick={() => openDecision("approve")} className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 sm:text-sm"><Check size={15} /> Approve</button>
+              )}
+              {canReject && (
+                <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
+              )}
+              {canDispatch && (
+                <Link to={`/outward/${id}/dispatch`} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">
+                  <Truck size={15} /> {dispatched ? "Update dispatch details" : "Fill dispatch details"}
+                </Link>
+              )}
+              {canEdit && (
+                <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
+              )}
+              {/* Download: only once the entry is fully dispatched, and only for the admin / warehouse manager. Sales and Account never get it. */}
+              {dispatched && (isSuperAdmin || isWarehouse) && (
+                <button type="button" onClick={() => downloadOutwardPdf(outward, items, docsStage && showDocuments ? documentRows : [], currentStatus, { includeDispatch: showDispatchInfo || showDocuments, includeCost: showCost })} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /> Download</button>
+              )}
             </div>
 
-            <span
-              className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium sm:px-4 sm:py-2 sm:text-sm ${
-                currentStatus === "Complete" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
-              }`}
-            >
-              {currentStatus}
-            </span>
+            {statusStyle && (
+              <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium sm:px-4 sm:py-2 sm:text-sm ${statusStyle.cls}`}>
+                {statusStyle.label}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -249,21 +274,26 @@ export default function OutwardDetail() {
             <Info icon={<User size={18} />} label="Customer" value={outward.customerName || "-"} />
             <Info icon={<User size={18} />} label="Company" value={outward.companyName || outward.warehouse?.company?.name || "-"} />
             <Info icon={<Truck size={18} />} label="Outward Type" value={outward.outwardType || "-"} />
-            <Info icon={<Route size={18} />} label="Dispatch Mode" value={outward.dispatchMode || "-"} />
-            <Info icon={<Truck size={18} />} label="Vehicle / AWB Number" value={outward.vehicleNumber || "-"} />
             <Info
               icon={<Calendar size={18} />}
-              label="Reference Date"
+              label={dispatched && (isSuperAdmin || isWarehouse) ? "Dispatch Date" : "Outward Date"}
               value={outward.refDocDate ? new Date(outward.refDocDate).toLocaleDateString("en-IN") : "-"}
             />
+            {showDispatchInfo && (
+              <>
+                <Info icon={<Route size={18} />} label="Dispatch Mode" value={isPlaceholder(outward.dispatchMode) ? "-" : outward.dispatchMode} />
+                <Info icon={<Truck size={18} />} label="Vehicle / AWB Number" value={outward.vehicleNumber || "-"} />
+              </>
+            )}
             <Info label="Created By" value={outward.createdBy?.name || outward.createdBy?.email || "-"} />
-            <Info label="Remarks" value={outward.remarks || "-"} />
+            {showDispatchInfo && <Info label="Remarks" value={outward.remarks || "-"} />}
           </div>
 
           {/* Reference documents — one row per invoice/e-way bill/etc the
               user added on the form. Falls back to the single refDoc*
               fields for older records saved before referenceDocuments
               existed. */}
+          {showDispatchInfo && (
           <div className="mt-5 pt-5 border-t">
             <p className="text-sm font-medium text-gray-700 mb-3">Reference Documents</p>
             <div className="overflow-x-auto rounded-lg border">
@@ -294,19 +324,46 @@ export default function OutwardDetail() {
               </table>
             </div>
           </div>
+          )}
         </div>
+
+        {/* Approval details - Sales / Account / Super admin only. Never sent to the warehouse. */}
+        {showCost && (workflow === "REJECTED" || outward.approvedByName || dispatched) && (
+          <div className={`rounded-xl border p-4 sm:p-6 ${workflow === "REJECTED" ? "border-red-200 bg-red-50" : "bg-white"}`}>
+            <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg">Approval</h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5">
+              <Info label={workflow === "REJECTED" ? "Rejected By" : "Approved By"} value={outward.approvedByName || "-"} />
+              <Info label={workflow === "REJECTED" ? "Rejected On" : "Approved On"} value={outward.approvedAt ? new Date(outward.approvedAt).toLocaleString("en-IN") : "-"} />
+              <Info label={workflow === "REJECTED" ? "Reason" : "Remarks"} value={outward.approvalRemarks || "-"} />
+              {dispatched && isSuperAdmin && <Info label="Dispatched By" value={outward.dispatchedByName || "-"} />}
+              {dispatched && isSuperAdmin && <Info label="Dispatched On" value={outward.dispatchedAt ? new Date(outward.dispatchedAt).toLocaleString("en-IN") : "-"} />}
+            </div>
+            {workflow === "REJECTED" && (
+              <p className="mt-3 text-xs text-red-600">Sales can edit this entry and send it for approval again, or Account can approve it again.</p>
+            )}
+          </div>
+        )}
 
         <div className="bg-white rounded-xl border p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-5">Items</h2>
 
-          <table className="w-full table-fixed text-[11px] sm:text-sm">
+          <div className={showCost ? "overflow-x-auto" : ""}>
+          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[760px]" : "table-fixed"}`}>
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Category</th>
-                <th className="py-2 px-1 sm:py-3 sm:px-3">SKU</th>
+                <th className="py-2 px-1 sm:py-3 sm:px-3">{isWarehouse ? "Model" : "SKU"}</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Qty</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">UOM</th>
+                {showCost && (
+                  <>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">Cost</th>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">Cost status</th>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">UTR</th>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">Proof</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -317,166 +374,95 @@ export default function OutwardDetail() {
                   <td className="py-2 px-1 truncate font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
+                  {showCost && (
+                    <>
+                      <td className="py-2 px-1 font-medium sm:py-4 sm:px-3">{formatMoney(item.cost)}</td>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">
+                        <span
+                          className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold sm:text-xs ${
+                            item.costStatus === "COMPLETED"
+                              ? "bg-green-100 text-green-700"
+                              : item.costStatus === "PARTIALLY_COMPLETED"
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-amber-100 text-amber-700"
+                          }`}
+                        >
+                          {costStatusLabel(item.costStatus)}
+                        </span>
+                      </td>
+                      <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.utrNumber || "-"}</td>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">
+                        {item.hasProof ? (
+                          <button type="button" onClick={() => handleViewProof(item.id)} className="inline-flex items-center gap-1 text-blue-700 hover:underline">
+                            <Paperclip size={13} /> View
+                          </button>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="text-center py-8 text-gray-500">
+                  <td colSpan={showCost ? 9 : 5} className="text-center py-8 text-gray-500">
                     No items found
                   </td>
                 </tr>
               )}
+              {showCost && items.length > 0 && (
+                <tr className="border-t bg-gray-50 font-semibold text-gray-900">
+                  <td colSpan="5" className="py-3 px-1 text-right sm:px-3">Total cost</td>
+                  <td className="py-3 px-1 sm:px-3">{formatMoney(items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0))}</td>
+                  <td colSpan="3"></td>
+                </tr>
+              )}
             </tbody>
           </table>
+          </div>
         </div>
 
-        <div className="bg-white rounded-xl border p-6">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Documents</h2>
-              <p className="text-sm text-gray-500 mt-1">Upload, download or delete required documents</p>
-            </div>
+        {showDocuments && <OutwardDocuments outwardId={id} documents={documents} canManage={canManageDocs} />}
+      </div>
 
-            <div className="relative shrink-0">
+
+      {/* Approve / reject dialog (Account, Super admin) */}
+      {decision && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-gray-900">
+              {decision === "approve" ? "Approve this outward entry?" : "Reject this outward entry?"}
+            </h3>
+            <p className="mt-1 text-sm text-gray-500">
+              {decision === "approve"
+                ? "The cost details will be marked approved and the entry goes to the warehouse manager for dispatch."
+                : "It goes back to Sales, who can fix the details and send it again."}
+            </p>
+            <label className="mt-4 mb-1.5 block text-xs font-medium text-gray-500">
+              {decision === "approve" ? "Remarks (optional)" : "Reason for rejecting"}
+            </label>
+            <textarea
+              rows={3}
+              value={decisionRemarks}
+              onChange={(e) => setDecisionRemarks(e.target.value)}
+              placeholder={decision === "approve" ? "Any note for the record" : "Tell Sales what needs to be corrected"}
+              className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" disabled={deciding} onClick={() => setDecision(null)} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
               <button
                 type="button"
-                onClick={() => setShowDocumentMenu((v) => !v)}
-                className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white hover:bg-gray-800"
+                disabled={deciding}
+                onClick={submitDecision}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${decision === "approve" ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"}`}
               >
-                <Plus size={14} /> Add document
+                {deciding ? "Please wait..." : decision === "approve" ? "Approve" : "Reject"}
               </button>
-
-              {showDocumentMenu && (
-                <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white p-1 shadow-lg">
-                  {[...REQUIRED_DOCUMENTS, "Other"].map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => handleAddDocumentClick(type, documents)}
-                      className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <FileText size={16} className="text-gray-400" />
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Hidden input driven by the menu above — the chosen
-                  category is passed via pendingCategoryRef so it's
-                  never a stale closure value by the time a file is picked. */}
-              <input
-                ref={addDocInputRef}
-                type="file"
-                className="hidden"
-                accept=".pdf,.jpg,.jpeg,.png,.webp"
-                onChange={handlePendingUpload}
-              />
             </div>
           </div>
-
-          <div className="space-y-3">
-            {documentRows.map((row) => {
-              const { label, document, required, key } = row;
-
-              const isUploadingThis = uploadingDocs[label] === true;
-              const isDownloading = document && docActionStatus[document.id] === "downloading";
-              const isDeleting = document && docActionStatus[document.id] === "deleting";
-
-              return (
-                <div key={key} className="border rounded-xl p-3 sm:p-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-                    <div className="flex items-center gap-2.5 min-w-0 sm:gap-3">
-                      <div
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 sm:w-10 sm:h-10 ${
-                          document ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"
-                        }`}
-                      >
-                        <FileText size={18} className="sm:hidden" />
-                        <FileText size={20} className="hidden sm:block" />
-                      </div>
-
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900 sm:text-base">{label}</p>
-
-                        {document ? (
-                          <p className="text-[11px] text-gray-500 truncate mt-1 sm:text-xs">
-                            {document.fileName || (document.fileKey ? String(document.fileKey).split("/").pop() : "Document")} {" • "} {document.fileType || "File"} {" • "}
-                            {(Number(document.fileSize || 0) / 1024).toFixed(1)} {" KB"}
-                          </p>
-                        ) : (
-                          <p className="text-[11px] text-red-500 mt-1 sm:text-xs">Not uploaded</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {document ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(document.id)}
-                            disabled={isDownloading || isDeleting}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-gray-50 disabled:opacity-50 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
-                            title="Download"
-                          >
-                            {isDownloading ? <Loader2 size={16} className="animate-spin sm:hidden" /> : <Download size={16} className="sm:hidden" />}
-                            {isDownloading ? <Loader2 size={18} className="hidden animate-spin sm:block" /> : <Download size={18} className="hidden sm:block" />}
-                            <span className="hidden sm:inline">Download</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(document.id)}
-                            disabled={isDeleting || isDownloading}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
-                            title="Delete"
-                          >
-                            {isDeleting ? <Loader2 size={16} className="animate-spin sm:hidden" /> : <Trash2 size={16} className="sm:hidden" />}
-                            {isDeleting ? <Loader2 size={18} className="hidden animate-spin sm:block" /> : <Trash2 size={18} className="hidden sm:block" />}
-                            <span className="hidden sm:inline">Delete</span>
-                          </button>
-                        </>
-                      ) : required ? (
-                        <label
-                          className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-black text-white hover:bg-gray-800 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm ${
-                            isUploadingThis ? "opacity-50 pointer-events-none" : ""
-                          }`}
-                        >
-                          {isUploadingThis ? <Loader2 size={16} className="animate-spin sm:hidden" /> : <Upload size={16} className="sm:hidden" />}
-                          {isUploadingThis ? <Loader2 size={18} className="hidden animate-spin sm:block" /> : <Upload size={18} className="hidden sm:block" />}
-                          <span>Upload</span>
-                          <input
-                            type="file"
-                            className="hidden"
-                            accept=".pdf,.jpg,.jpeg,.png,.webp"
-                            onChange={(event) => handleUpload(event, label)}
-                            disabled={isUploadingThis}
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-5 pt-4 border-t">
-            {currentStatus === "Complete" ? (
-              <div className="flex items-center gap-2 text-green-600 font-medium">
-                <span className="w-2 h-2 rounded-full bg-green-500" />
-                All required documents uploaded
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-amber-600 font-medium">
-                <span className="w-2 h-2 rounded-full bg-amber-500" />
-                Some required documents are still pending
-              </div>
-            )}
-          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

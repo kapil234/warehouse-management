@@ -15,6 +15,8 @@ export const REQUIRED_DOCUMENTS = [
   "Dispatch photo",
 ];
 
+const totalCostOf = (items) => items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
+
 export function formatOutwardType(type) {
   if (!type) return "-";
 
@@ -110,6 +112,9 @@ export function formatOutwardEntry(outward, index) {
     uploadedDocuments: statusData.uploadedDocuments,
     requiredDocuments: statusData.requiredDocuments,
     items,
+    workflowStatus: outward.workflowStatus || null,
+    dispatchState: outward.dispatchState || null,
+    totalCost: totalCostOf(items),
     refDocType: outward.refDocType || outward.ref_doc_type || "",
     refDocNumber: outward.refDocNumber || outward.ref_doc_number || "",
     refDocDate: outward.refDocDate || outward.ref_doc_date || "",
@@ -121,3 +126,41 @@ export function formatOutwardEntry(outward, index) {
     createdAt,
   };
 }
+
+
+// -------------------------------------------------
+// Approval workflow (Sales -> Account -> Warehouse)
+// -------------------------------------------------
+
+export const COST_STATUS_OPTIONS = [
+  { value: "COMPLETED", label: "Completed" },
+  { value: "PARTIALLY_COMPLETED", label: "Partially completed" },
+  { value: "PENDING", label: "Pending" },
+];
+
+export const costStatusLabel = (value) =>
+  COST_STATUS_OPTIONS.find((o) => o.value === value)?.label || "-";
+
+export const WORKFLOW_STATUS = {
+  PENDING_APPROVAL: { label: "Pending approval", cls: "bg-amber-100 text-amber-700" },
+  PENDING_DISPATCH: { label: "Pending dispatch", cls: "bg-blue-100 text-blue-700" },
+  DISPATCHED: { label: "Dispatched", cls: "bg-green-100 text-green-700" },
+  REJECTED: { label: "Rejected", cls: "bg-red-100 text-red-600" },
+};
+
+// The warehouse manager never receives the real workflow status - only
+// "Pending" / "Dispatched" (dispatchState).
+export const DISPATCH_STATE = {
+  Pending: { label: "Pending dispatch", cls: "bg-blue-100 text-blue-700" },
+  Dispatched: { label: "Dispatched", cls: "bg-green-100 text-green-700" },
+};
+
+export const isPlaceholder = (value) => !value || String(value).trim().toLowerCase() === "pending";
+
+export const formatMoney = (value) =>
+  value === null || value === undefined || value === ""
+    ? "-"
+    : `\u20B9${Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+export const totalCost = (items = []) =>
+  items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);

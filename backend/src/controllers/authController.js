@@ -11,7 +11,7 @@ import {
 } from "../utils/userCompanies.js";
 
 const SALT_ROUNDS = 10;
-const ROLES = ["SUPER_ADMIN", "WAREHOUSE_MANAGER"];
+const ROLES = ["SUPER_ADMIN", "WAREHOUSE_MANAGER", "SALES", "ACCOUNT"];
 
 // =====================================================
 // Small internal helper — can `req.user` manage `targetUser`?

@@ -13,6 +13,12 @@ const ACTION_STYLES = {
   DOCUMENT_ADDED: "bg-green-100 text-green-700",
   DOCUMENT_REMOVED: "bg-red-100 text-red-700",
   DELETED: "bg-red-100 text-red-700",
+  SUBMITTED: "bg-amber-100 text-amber-700",
+  RESUBMITTED: "bg-amber-100 text-amber-700",
+  APPROVED: "bg-green-100 text-green-700",
+  REJECTED: "bg-red-100 text-red-700",
+  COST_UPDATED: "bg-blue-100 text-blue-700",
+  DISPATCHED: "bg-green-100 text-green-700",
 };
 
 const ACTION_LABELS = {
@@ -24,6 +30,12 @@ const ACTION_LABELS = {
   DOCUMENT_ADDED: "Document added",
   DOCUMENT_REMOVED: "Document removed",
   DELETED: "Deleted",
+  SUBMITTED: "Submitted",
+  RESUBMITTED: "Resubmitted",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+  COST_UPDATED: "Cost updated",
+  DISPATCHED: "Dispatched",
 };
 
 // An entry carries an explicit "before / after" only when its

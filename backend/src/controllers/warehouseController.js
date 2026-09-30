@@ -1,5 +1,6 @@
 import prisma from "../config/prisma.js";
 import { userBelongsToCompany } from "../utils/userCompanies.js";
+import { isFinanceSide, getUserCompanyIds } from "../utils/outwardWorkflow.js";
 
 const WAREHOUSE_SELECT = {
   id: true,
@@ -59,6 +60,11 @@ export async function getAllWarehouses(req, res) {
           some: { userId: req.user.id, accessLevel: "MANAGE" },
         },
       });
+    } else if (isFinanceSide(req.user.role)) {
+      // SALES / ACCOUNT: every warehouse of the companies they belong to.
+      const companyIds = await getUserCompanyIds(req.user);
+      where.AND.push({ companyId: { in: companyIds } });
+      if (req.query.companyId) where.AND.push({ companyId: req.query.companyId });
     } else if (req.query.companyId) {
       where.AND.push({ companyId: req.query.companyId });
     }
@@ -108,6 +114,13 @@ export async function getWarehouseById(req, res) {
       });
 
       if (!access || access.accessLevel !== "MANAGE") {
+        return res.status(403).json({ message: "You don't have access to this warehouse" });
+      }
+    }
+
+    if (isFinanceSide(req.user.role)) {
+      const companyIds = await getUserCompanyIds(req.user);
+      if (!warehouse.companyId || !companyIds.includes(warehouse.companyId)) {
         return res.status(403).json({ message: "You don't have access to this warehouse" });
       }
     }

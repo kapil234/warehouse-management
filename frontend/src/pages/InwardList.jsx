@@ -421,6 +421,14 @@ export default function Inward() {
       selectedWarehouse
     );
 
+  // Warehouse managers see only the warehouse they've switched to in the
+  // navbar. Other roles keep the scope the backend already gives them.
+  const isWarehouseManager = currentUser?.role === "WAREHOUSE_MANAGER";
+  const scopedWarehouseId = isWarehouseManager ? selectedWarehouse?.id : undefined;
+  // A manager's warehouse is only known once the navbar has loaded it; don't
+  // fire an unscoped request (all warehouses) in the meantime.
+  const waitingForWarehouse = isWarehouseManager && !scopedWarehouseId;
+
   const navigate = useNavigate();
   const dispatch = useDispatch();
 
@@ -458,10 +466,10 @@ export default function Inward() {
     useState(false);
 
   const [datePreset, setDatePreset] =
-    useState("7d");
+    useState("all");
 
   const [dateRange, setDateRange] = useState(
-    () => getPresetRange("7d")
+    () => getPresetRange("all")
   );
 
   const [page, setPage] = useState(1);
@@ -478,7 +486,7 @@ export default function Inward() {
   // exist any more in the newly filtered result set.
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to]);
+  }, [scopedWarehouseId, debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to]);
 
   const handleDatePresetSelect = (preset) => {
     setDatePreset(preset);
@@ -492,11 +500,6 @@ export default function Inward() {
       to,
     });
   };
-
-  const scopedWarehouseId =
-    currentUser?.role === "WAREHOUSE_MANAGER"
-      ? selectedWarehouse?.id
-      : undefined;
 
   const queryParams = useMemo(
     () => ({
@@ -512,16 +515,18 @@ export default function Inward() {
   );
 
   useEffect(() => {
+    if (waitingForWarehouse) return;
     dispatch(fetchInwardList(queryParams));
-  }, [dispatch, queryParams]);
+  }, [dispatch, queryParams, waitingForWarehouse]);
 
   useEffect(() => {
+    if (waitingForWarehouse) return;
     dispatch(
       fetchInwardHistory({
         warehouseId: scopedWarehouseId,
       })
     );
-  }, [dispatch, scopedWarehouseId]);
+  }, [dispatch, scopedWarehouseId, waitingForWarehouse]);
 
   const inwardData = useMemo(
     () => rawList.map(formatGrn),
@@ -606,7 +611,7 @@ export default function Inward() {
               status={historyStatus}
             />
 
-            {warehousePermissions.canInward ? (
+            {["SALES", "ACCOUNT"].includes(currentUser?.role) ? null : warehousePermissions.canInward ? (
               <Link
                 to="/inward/create"
                 className="flex items-center gap-1 rounded-lg bg-[#185FA5] px-2.5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#124c88] sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"

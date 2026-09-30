@@ -1,6 +1,7 @@
 import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog } from "../utils/auditLog.js";
+import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS } from "../utils/outwardWorkflow.js";
  
 // assertLinkedEntryAccess used to be 3 sequential round-trips (entry, then
 // its warehouse, then the caller's warehouse access) plus a 4th one later
@@ -19,6 +20,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
     select: {
       id: true,
       warehouseId: true,
+      ...(linkedType === "grn" ? {} : { status: true, createdById: true }),
       [numberField]: true,
       warehouse: { select: { id: true, companyId: true, company: { select: { status: true } } } },
     },
@@ -31,7 +33,35 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
 
   entry.entryNumber = entry[numberField] || entry.id;
 
-  if (req.user.role === "SUPER_ADMIN") return entry;
+  if (req.user.role === "SUPER_ADMIN") {
+    // The documents section only exists from dispatch details onwards.
+    if (linkedType === "outward" && ![STATUS.PENDING_DISPATCH, STATUS.DISPATCHED].includes(entry.status)) {
+      throw Object.assign(new Error("Documents are available after approval."), { status: 409 });
+    }
+    return entry;
+  }
+
+  // Sales / Account may open (download) inward documents and the dispatch
+  // documents of outward entries in their company, but never add or delete them.
+  if (isFinanceSide(req.user.role)) {
+    const companyIds = await getUserCompanyIds(req.user);
+    if (permission || !warehouse.companyId || !companyIds.includes(warehouse.companyId)) {
+      throw Object.assign(new Error("You don't have access to this document."), { status: 403 });
+    }
+    // Dispatch documents open up only after the warehouse manager has dispatched.
+    if (linkedType === "outward" && entry.status !== STATUS.DISPATCHED) {
+      throw Object.assign(new Error("Dispatch documents are available after dispatch."), { status: 403 });
+    }
+    return entry;
+  }
+
+  // The warehouse only ever sees outward entries Account has approved.
+  if (linkedType === "outward" && !WAREHOUSE_VISIBLE_STATUSES.includes(entry.status)) {
+    throw Object.assign(new Error("You don't have access to this warehouse."), { status: 403 });
+  }
+
+  // The warehouse manager can add / delete outward documents both before and after dispatch
+  // (WAREHOUSE_VISIBLE_STATUSES above already limits this to PENDING_DISPATCH / DISPATCHED).
 
   const access = await prisma.warehouseAccess.findUnique({
     where: { userId_warehouseId: { userId: req.user.id, warehouseId: entry.warehouseId } },

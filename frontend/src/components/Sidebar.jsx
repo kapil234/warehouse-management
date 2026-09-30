@@ -51,6 +51,9 @@ export default function Sidebar({
 
   const role = user?.role;
 
+  // Sales and Account see dashboard, inward (view only), outward and reports.
+  const navItems = BASE_ITEMS;
+
   // System Configuration items according to role
   const systemConfigItems =
     role === "SUPER_ADMIN"
@@ -97,7 +100,7 @@ export default function Sidebar({
 
           {/* Main Navigation */}
           <ul className="space-y-1 px-3">
-            {BASE_ITEMS.map(({ key, label, icon: Icon }) => {
+            {navItems.map(({ key, label, icon: Icon }) => {
               return (
                 <li key={key}>
                   <button
@@ -180,7 +183,7 @@ export default function Sidebar({
           paddingBottom: "env(safe-area-inset-bottom)",
         }}
       >
-        {BASE_ITEMS.slice(0, 5).map(
+        {navItems.slice(0, 5).map(
           ({ key, label, icon: Icon }) => {
             return (
               <button

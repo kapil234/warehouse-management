@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.js";
+import { isFinanceSide, getFinanceWarehouseIds } from "../utils/outwardWorkflow.js";
  
 /**
  * =========================================================
@@ -32,6 +33,8 @@ async function getScopedWarehouseIds(req) {
     });
     return grants.map((g) => g.warehouseId);
   }
+  // Sales / Account: read-only, limited to their companies' warehouses.
+  if (isFinanceSide(req.user.role)) return getFinanceWarehouseIds(req.user);
   return [];
 }
  

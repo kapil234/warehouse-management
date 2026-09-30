@@ -25,7 +25,7 @@ import {
   selectOutwardHistory,
   selectOutwardHistoryStatus,
 } from "../features/outward/outwardSlice";
-import { formatOutwardEntry } from "../features/outward/outwardHelpers";
+import { formatOutwardEntry, WORKFLOW_STATUS, DISPATCH_STATE, formatMoney } from "../features/outward/outwardHelpers";
 import HistoryPanel from "../features/shared/HistoryPanel";
 
 const filters = ["All types", "Sales", "Service", "Returns", "Damage/Scrap"];
@@ -115,6 +115,34 @@ function StatusBadge({ status, statusType, pendingDocuments = 0 }) {
     </span>
   );
 }
+
+// Workflow status of an entry. Warehouse managers only ever get
+// "Pending" / "Dispatched" (never the approval side), everyone else the full status.
+function WorkflowBadge({ item }) {
+  const style = item.workflowStatus
+    ? WORKFLOW_STATUS[item.workflowStatus]
+    : DISPATCH_STATE[item.dispatchState];
+  if (!style) return null;
+  return (
+    <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ${style.cls}`}>
+      {style.label}
+    </span>
+  );
+}
+
+// Status chips per role (value = ?status= sent to the API).
+const STATUS_FILTERS_FULL = [
+  { value: "", label: "All status" },
+  { value: "PENDING_APPROVAL", label: "Pending approval" },
+  { value: "PENDING_DISPATCH", label: "Pending dispatch" },
+  { value: "DISPATCHED", label: "Dispatched" },
+  { value: "REJECTED", label: "Rejected" },
+];
+const STATUS_FILTERS_WAREHOUSE = [
+  { value: "", label: "All status" },
+  { value: "PENDING_DISPATCH", label: "Pending dispatch" },
+  { value: "DISPATCHED", label: "Dispatched" },
+];
 
 const DATE_PRESETS = [
   { value: "today", label: "Today" },
@@ -286,6 +314,18 @@ export default function Outward() {
     try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
   })();
   const warehousePermissions = getWarehousePermissions(currentUser, selectedWarehouse);
+  const role = currentUser?.role;
+  const isWarehouseRole = role === "WAREHOUSE_MANAGER";
+  // Warehouse managers see only the warehouse they've switched to in the
+  // navbar. Other roles keep the scope the backend already gives them.
+  const scopedWarehouseId = isWarehouseRole ? selectedWarehouse?.id : undefined;
+  // Don't fire an unscoped request (all warehouses) before the navbar has
+  // loaded the manager's warehouse.
+  const waitingForWarehouse = isWarehouseRole && !scopedWarehouseId;
+  // Sales (and the super admin) create outward entries; Account approves; the warehouse dispatches.
+  const canCreate = role === "SALES" || (role === "SUPER_ADMIN" && warehousePermissions.canOutward);
+  const showCost = !isWarehouseRole;
+  const statusFilters = isWarehouseRole ? STATUS_FILTERS_WAREHOUSE : STATUS_FILTERS_FULL;
   const navigate = useNavigate();
   const dispatch = useDispatch();
 
@@ -301,10 +341,11 @@ export default function Outward() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState("All types");
   const [showPendingOnly, setShowPendingOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
 
   // Date range filter - defaults to the last 7 days.
-  const [datePreset, setDatePreset] = useState("7d");
-  const [dateRange, setDateRange] = useState(() => getPresetRange("7d"));
+  const [datePreset, setDatePreset] = useState("all");
+  const [dateRange, setDateRange] = useState(() => getPresetRange("all"));
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -315,7 +356,7 @@ export default function Outward() {
   // Any filter change starts back at page 1.
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to]);
+  }, [scopedWarehouseId, debouncedSearch, activeFilter, statusFilter, datePreset, dateRange.from, dateRange.to]);
 
   const handleDatePresetSelect = (preset) => {
     setDatePreset(preset);
@@ -327,40 +368,36 @@ export default function Outward() {
     setDateRange({ from, to });
   };
 
-  // Warehouse managers see only the warehouse they've switched to in
-  // the navbar. Admins are not scoped to a single warehouse, so they
-  // keep seeing everything within their existing access (company /
-  // all companies).
-  const scopedWarehouseId =
-    currentUser?.role === "WAREHOUSE_MANAGER" ? selectedWarehouse?.id : undefined;
-
   const queryParams = useMemo(
     () => ({
       warehouseId: scopedWarehouseId,
       search: debouncedSearch || undefined,
       type: FILTER_TO_OUTWARD_TYPE[activeFilter],
+      status: statusFilter || undefined,
       dateFrom: datePreset !== "all" ? dateRange.from || undefined : undefined,
       dateTo: datePreset !== "all" ? dateRange.to || undefined : undefined,
       page,
       pageSize: 20,
     }),
-    [scopedWarehouseId, debouncedSearch, activeFilter, datePreset, dateRange.from, dateRange.to, page]
+    [scopedWarehouseId, debouncedSearch, activeFilter, statusFilter, datePreset, dateRange.from, dateRange.to, page]
   );
 
   useEffect(() => {
+    if (waitingForWarehouse) return;
     dispatch(fetchOutwardList(queryParams));
-  }, [dispatch, queryParams]);
+  }, [dispatch, queryParams, waitingForWarehouse]);
 
   useEffect(() => {
+    if (waitingForWarehouse) return;
     dispatch(fetchOutwardHistory({ warehouseId: scopedWarehouseId }));
-  }, [dispatch, scopedWarehouseId]);
+  }, [dispatch, scopedWarehouseId, waitingForWarehouse]);
 
   const outwardData = useMemo(() => rawList.map(formatOutwardEntry), [rawList]);
 
   // Search / type / date are now applied server-side (see queryParams above).
   // "Pending docs" only filters within the page currently on screen.
   const filteredData = outwardData.filter((item) =>
-    showPendingOnly ? item.statusType !== "complete" : true
+    showPendingOnly && isWarehouseRole ? item.statusType !== "complete" : true
   );
 
   const groupedData = filteredData.reduce((groups, item) => {
@@ -372,9 +409,12 @@ export default function Outward() {
   const totalEntries = pagination.total;
   // These three read off the current page only - a full across-all-pages
   // figure would need its own aggregate endpoint.
-  const todaysOutward = outwardData.filter((item) => item.date === "Today").length;
   const documentsPending = outwardData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
-  const completed = outwardData.filter((item) => item.statusType === "complete").length;
+  const countStatus = (workflow, dispatchState) =>
+    outwardData.filter((item) => (item.workflowStatus ? item.workflowStatus === workflow : item.dispatchState === dispatchState)).length;
+  const awaitingApproval = outwardData.filter((item) => item.workflowStatus === "PENDING_APPROVAL").length;
+  const awaitingDispatch = countStatus("PENDING_DISPATCH", "Pending");
+  const dispatchedCount = countStatus("DISPATCHED", "Dispatched");
 
   const goToPage = (next) => {
     const clamped = Math.min(Math.max(next, 1), pagination.totalPages || 1);
@@ -386,6 +426,16 @@ export default function Outward() {
       alert("Outward ID is missing");
       return;
     }
+    // Waiting for dispatch: the warehouse manager and the super admin open the dispatch page
+    // (the super admin also gets the sales / cost information and an Update button there).
+    // Dispatched (or any other status / role): open the outward details page.
+    const pendingDispatch = isWarehouseRole
+      ? item.dispatchState === "Pending"
+      : item.workflowStatus === "PENDING_DISPATCH";
+    if (pendingDispatch && (isWarehouseRole || role === "SUPER_ADMIN")) {
+      navigate(`/outward/${item.id}/dispatch`);
+      return;
+    }
     navigate(`/outward/${item.id}`);
   };
 
@@ -395,13 +445,19 @@ export default function Outward() {
         <div className="mb-4 flex items-center justify-between sm:mb-5">
           <div>
             <h1 className="text-lg font-bold text-gray-900 sm:text-2xl">Outward entries</h1>
-            <p className="mt-0.5 text-[11px] text-gray-500 sm:mt-1 sm:text-sm">View and manage all outgoing stock</p>
+            <p className="mt-0.5 text-[11px] text-gray-500 sm:mt-1 sm:text-sm">
+              {role === "ACCOUNT"
+                ? "Review the cost details and approve outgoing stock"
+                : isWarehouseRole
+                ? "Approved entries waiting for dispatch"
+                : "View and manage all outgoing stock"}
+            </p>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
             <HistoryPanel entries={history} status={historyStatus} />
 
-            {warehousePermissions.canOutward ? (
+            {!canCreate ? null : (
               <Link
                 to="/outward/create"
                 className="flex items-center gap-1 rounded-lg bg-[#185FA5] px-2.5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#124c88] sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"
@@ -410,26 +466,25 @@ export default function Outward() {
                 <span className="hidden sm:inline">New outward</span>
                 <span className="sm:hidden">New</span>
               </Link>
-            ) : (
-              <button
-                type="button"
-                disabled
-                title="You do not have outward access for the selected warehouse"
-                className="flex cursor-not-allowed items-center gap-1 rounded-lg bg-gray-300 px-2.5 py-2 text-xs font-semibold text-gray-500 sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"
-              >
-                <Plus size={16} />
-                <span className="hidden sm:inline">New outward</span>
-                <span className="sm:hidden">New</span>
-              </button>
             )}
           </div>
         </div>
 
         <div className="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:grid-cols-4 sm:gap-3">
           <SummaryCard title="Total entries" value={loading ? "—" : totalEntries} icon={Truck} />
-          <SummaryCard title="Today's outward" value={loading ? "—" : todaysOutward} icon={Clock3} />
-          <SummaryCard title="Documents pending" value={loading ? "—" : documentsPending} icon={FileWarning} danger />
-          <SummaryCard title="Completed" value={loading ? "—" : completed} icon={CheckCircle2} />
+          {isWarehouseRole ? (
+            <>
+              <SummaryCard title="Pending dispatch" value={loading ? "—" : awaitingDispatch} icon={Clock3} />
+              <SummaryCard title="Documents pending" value={loading ? "—" : documentsPending} icon={FileWarning} danger />
+              <SummaryCard title="Dispatched" value={loading ? "—" : dispatchedCount} icon={CheckCircle2} />
+            </>
+          ) : (
+            <>
+              <SummaryCard title="Pending approval" value={loading ? "—" : awaitingApproval} icon={Clock3} danger={awaitingApproval > 0} />
+              <SummaryCard title="Pending dispatch" value={loading ? "—" : awaitingDispatch} icon={FileWarning} />
+              <SummaryCard title="Dispatched" value={loading ? "—" : dispatchedCount} icon={CheckCircle2} />
+            </>
+          )}
         </div>
 
         <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-2.5 sm:mb-5 sm:p-4">
@@ -466,15 +521,32 @@ export default function Outward() {
               </button>
             ))}
 
-            <button
-              type="button"
-              onClick={() => setShowPendingOnly(!showPendingOnly)}
-              className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                showPendingOnly ? "border-red-200 bg-red-50 text-red-600" : "border-gray-300 bg-white text-gray-700"
-              }`}
-            >
-              Pending docs
-            </button>
+            {isWarehouseRole && (
+              <button
+                type="button"
+                onClick={() => setShowPendingOnly(!showPendingOnly)}
+                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
+                  showPendingOnly ? "border-red-200 bg-red-50 text-red-600" : "border-gray-300 bg-white text-gray-700"
+                }`}
+              >
+                Pending docs
+              </button>
+            )}
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-1.5 sm:gap-2">
+            {statusFilters.map((f) => (
+              <button
+                key={f.value || "all"}
+                type="button"
+                onClick={() => setStatusFilter(f.value)}
+                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
+                  statusFilter === f.value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -505,13 +577,14 @@ export default function Outward() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[850px] text-left">
+              <table className="w-full min-w-[900px] text-left">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">DC No.</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Outward type</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Customer</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Quantity</th>
+                    {showCost && <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Total cost</th>}
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Date & time</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Status</th>
                     <th className="px-5 py-3"></th>
@@ -534,12 +607,22 @@ export default function Outward() {
                         <span className="text-sm font-semibold text-gray-800">{item.quantity}</span>
                         <span className="ml-1 text-[11px] text-gray-400">pcs</span>
                       </td>
+                      {showCost && (
+                        <td className="px-5 py-4">
+                          <span className="text-sm font-medium text-gray-800">{formatMoney(item.totalCost)}</span>
+                        </td>
+                      )}
                       <td className="px-5 py-4">
                         <p className="text-xs text-gray-700">{item.date}</p>
                         <p className="text-[11px] text-gray-400">{item.time}</p>
                       </td>
                       <td className="px-5 py-4">
-                        <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
+                        <div className="flex flex-col items-start gap-1">
+                          <WorkflowBadge item={item} />
+                          {isWarehouseRole && item.dispatchState === "Dispatched" && (
+                            <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
+                          )}
+                        </div>
                       </td>
                       <td className="px-5 py-4 text-right">
                         <ChevronRight size={17} className="text-gray-400" />
@@ -641,7 +724,7 @@ export default function Outward() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-bold text-gray-900">{item.outward}</p>
-                          <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
+                          <WorkflowBadge item={item} />
                         </div>
 
                         <p className="mt-1 truncate text-xs text-gray-700">
@@ -652,6 +735,12 @@ export default function Outward() {
                           <span>{item.time}</span>
                           <span>·</span>
                           <span>{item.quantity} pcs</span>
+                          {showCost && (
+                            <>
+                              <span>·</span>
+                              <span>{formatMoney(item.totalCost)}</span>
+                            </>
+                          )}
                           {item.serials > 0 && (
                             <>
                               <span>·</span>

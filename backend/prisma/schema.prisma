@@ -10,7 +10,24 @@ datasource db {
 enum Role {
   SUPER_ADMIN
   WAREHOUSE_MANAGER
+  SALES
+  ACCOUNT
+
 }
+
+enum OutwardStatus {
+  PENDING_APPROVAL   // created by Sales, waiting for the Account team
+  PENDING_DISPATCH   // approved by Account, waiting for the Warehouse manager
+  DISPATCHED         // Warehouse manager filled dispatch details
+  REJECTED           // Account rejected it; Sales can edit + resubmit
+}
+
+enum CostStatus {
+  COMPLETED
+  PARTIALLY_COMPLETED
+  PENDING
+}
+
 
 enum AccessLevel {
   NONE
@@ -209,6 +226,19 @@ model Min {
 
   items              MinItem[]
   referenceDocuments MinReferenceDocument[]
+  status          OutwardStatus @default(PENDING_APPROVAL)
+
+  approvedById    String?
+  approvedByName  String?
+  approvedAt      DateTime?
+  approvalRemarks String?          // reason when rejected / note when approved
+
+  dispatchedById   String?
+  dispatchedByName String?
+  dispatchedAt     DateTime?
+
+  @@index([status])
+
 
   @@index([warehouseId])
   @@index([createdById])
@@ -225,6 +255,13 @@ model MinItem {
   uom        String
 
   min Min @relation(fields: [minId], references: [id], onDelete: Cascade)
+  cost           Decimal?    @db.Decimal(14, 2)
+  costStatus     CostStatus?
+  utrNumber      String?
+  proofFileKey   String?     // Supabase key of the uploaded UTR image / file
+  proofFileName  String?
+  proofFileType  String?
+
 
   @@index([minId])
   @@index([category, companyName])

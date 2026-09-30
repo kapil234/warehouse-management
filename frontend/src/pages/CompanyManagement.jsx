@@ -26,11 +26,6 @@ import {
   selectCompanySaveStatus,
   selectCompanyError,
 } from "../features/company/companySlice";
-import {
-  fetchWarehouses,
-  fetchWarehouseAccess,
-  revokeWarehouseAccess,
-} from "../features/warehouse/warehouseSlice";
 
 const PINCODE_REGEX = /^\d{6}$/;
 const EMPTY_COMPANY = { name: "", locality: "", city: "", state: "", pincode: "", status: "Active" };

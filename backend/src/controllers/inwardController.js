@@ -1,6 +1,7 @@
 import prisma from "../config/prisma.js";
 import { recordAuditLog, diffFields, diffItems, describeItem } from "../utils/auditLog.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
+import { isFinanceSide, getFinanceWarehouseIds } from "../utils/outwardWorkflow.js";
  
 /**
  * =========================================================
@@ -131,6 +132,9 @@ export async function listGrn(req, res) {
         select: { warehouseId: true },
       });
       scopedWarehouseIds = grants.map((g) => g.warehouseId);
+    } else if (isFinanceSide(req.user.role)) {
+      // Sales / Account: view-only, limited to their companies' warehouses.
+      scopedWarehouseIds = await getFinanceWarehouseIds(req.user);
     }
     // SUPER_ADMIN: no scoping — sees everything (optionally filtered
     // by ?warehouseId= below like everyone else).
@@ -489,6 +493,12 @@ export async function getGrnById(req, res) {
         },
       });
       if (!access || access.accessLevel !== "MANAGE") {
+        return res.status(403).json({ message: "You don't have access to this GRN's warehouse" });
+      }
+    }
+    if (isFinanceSide(req.user.role)) {
+      const allowed = await getFinanceWarehouseIds(req.user);
+      if (!allowed.includes(grn.warehouseId)) {
         return res.status(403).json({ message: "You don't have access to this GRN's warehouse" });
       }
     }
@@ -1112,6 +1122,9 @@ export async function listInwardModels(req, res) {
       const access = await prisma.warehouseAccess.findUnique({ where: { userId_warehouseId: { userId: req.user.id, warehouseId } } });
       if (!access || access.accessLevel !== "MANAGE") return res.status(403).json({ message: "You don't have access to this warehouse" });
     }
+    if (isFinanceSide(req.user.role) && !(await getFinanceWarehouseIds(req.user)).includes(warehouseId)) {
+      return res.status(403).json({ message: "You don't have access to this warehouse" });
+    }
  
     const [catalog, history] = await Promise.all([
       prisma.warehouseModel.findMany({ where: { warehouseId }, orderBy: [{ category: "asc" }, { companyName: "asc" }, { name: "asc" }] }),
@@ -1174,6 +1187,9 @@ export async function listInwardCompanies(req, res) {
     if (req.user.role === "WAREHOUSE_MANAGER") {
       const access = await prisma.warehouseAccess.findUnique({ where: { userId_warehouseId: { userId: req.user.id, warehouseId } } });
       if (!access || access.accessLevel !== "MANAGE") return res.status(403).json({ message: "You don't have access to this warehouse" });
+    }
+    if (isFinanceSide(req.user.role) && !(await getFinanceWarehouseIds(req.user)).includes(warehouseId)) {
+      return res.status(403).json({ message: "You don't have access to this warehouse" });
     }
  
     const [catalog, history] = await Promise.all([
@@ -1247,6 +1263,9 @@ export async function listGrnHistory(req, res) {
         select: { warehouseId: true },
       });
       scopedWarehouseIds = grants.map((g) => g.warehouseId);
+    } else if (isFinanceSide(req.user.role)) {
+      // Sales / Account: view-only, limited to their companies' warehouses.
+      scopedWarehouseIds = await getFinanceWarehouseIds(req.user);
     }
  
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);

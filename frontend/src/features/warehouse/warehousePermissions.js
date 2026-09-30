@@ -38,6 +38,16 @@ export const getWarehousePermissions = (user, warehouseOrId) => {
     };
   }
 
+  // Sales creates outward entries for the warehouses of their company.
+  // Account only approves; neither works with inward or documents.
+  if (user?.role === "SALES") {
+    return {
+      canInward: false,
+      canOutward: companyActive && (!warehouse || outwardActive),
+      canManageDocuments: false,
+    };
+  }
+
   if (user?.role !== "WAREHOUSE_MANAGER" || !warehouseId) {
     return { canInward: false, canOutward: false, canManageDocuments: false };
   }

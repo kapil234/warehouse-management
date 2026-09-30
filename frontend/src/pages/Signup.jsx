@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { ArrowLeft, Check, Eye, EyeOff, Loader2, Package, UserPlus } from "lucide-react";
-import { signupUser, createUser, fetchMe, selectAuthStatus, selectAuthError } from "../features/auth/authSlice";
+import { ArrowLeft, Eye, EyeOff, Package, UserPlus } from "lucide-react";
+import { signupUser, createUser, selectAuthStatus, selectAuthError } from "../features/auth/authSlice";
 import { fetchWarehouses, selectWarehouses } from "../features/warehouse/warehouseSlice";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
 import CompanyMultiSelect from "../components/CompanyMultiSelect";
@@ -10,6 +10,8 @@ import CompanyMultiSelect from "../components/CompanyMultiSelect";
 const ROLES = [
   { value: "SUPER_ADMIN", label: "Super Admin" },
   { value: "WAREHOUSE_MANAGER", label: "Warehouse Manager" },
+  { value: "SALES", label: "Sales" },
+  { value: "ACCOUNT", label: "Account" },
 ];
 
 const emptyAccess = () => ({ canInward: true, canOutward: true, canManageDocuments: true });

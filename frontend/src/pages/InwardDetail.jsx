@@ -9,7 +9,6 @@ import {
   Package,
   Calendar,
   User,
-  Truck,
   Hash,
   Plus,
 } from "lucide-react";
@@ -73,6 +72,8 @@ export default function InwardDetail() {
   const { id } = useParams();
 
   const inward = useSelector(selectCurrentInward);
+  // Sales / Account can view inward details and download documents, nothing more.
+  const viewOnly = useSelector((state) => ["SALES", "ACCOUNT"].includes(state.auth.user?.role));
   const detailStatus = useSelector(selectInwardDetailStatus);
   const error = useSelector(selectInwardDetailError);
   const docActionStatus = useSelector(selectDocActionStatus);
@@ -251,7 +252,9 @@ export default function InwardDetail() {
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
+              {!viewOnly && (
               <button type="button" onClick={() => navigate(`/inward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
+              )}
               <button type="button" onClick={() => downloadInwardPdf(inward, items, documents)} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /> Download</button>
             </div>
 
@@ -333,9 +336,10 @@ export default function InwardDetail() {
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Documents</h2>
-              <p className="text-sm text-gray-500 mt-1">Upload, download or delete required documents</p>
+              <p className="text-sm text-gray-500 mt-1">{viewOnly ? "Download documents" : "Upload, download or delete required documents"}</p>
             </div>
 
+            {!viewOnly && (
             <div className="relative shrink-0">
               <button
                 type="button"
@@ -372,6 +376,7 @@ export default function InwardDetail() {
                 onChange={handlePendingUpload}
               />
             </div>
+            )}
           </div>
 
           <div className="space-y-3">
@@ -424,6 +429,7 @@ export default function InwardDetail() {
                             <span className="hidden sm:inline">Download</span>
                           </button>
 
+                          {!viewOnly && (
                           <button
                             type="button"
                             onClick={() => handleDelete(document.id)}
@@ -435,8 +441,10 @@ export default function InwardDetail() {
                             {isDeleting ? <Loader2 size={18} className="hidden animate-spin sm:block" /> : <Trash2 size={18} className="hidden sm:block" />}
                             <span className="hidden sm:inline">Delete</span>
                           </button>
+
+                          )}
                         </>
-                      ) : required ? (
+                      ) : required && !viewOnly ? (
                         <label
                           className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-black text-white hover:bg-gray-800 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm ${
                             isUploadingThis ? "opacity-50 pointer-events-none" : ""

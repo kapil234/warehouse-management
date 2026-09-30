@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ROLES = ['SUPER_ADMIN', 'WAREHOUSE_MANAGER'];
+export const ROLES = ['SUPER_ADMIN', 'WAREHOUSE_MANAGER', 'SALES', 'ACCOUNT'];
 
 export const signupSchema = z.object({
   name: z.string().min(1, 'Name is required'),

@@ -35,6 +35,10 @@ const router = express.Router();
 
 router.use(authenticate);
 
+// Sales / Account can only VIEW inward (list, detail, history, lookups).
+// Every write route below is restricted to SUPER_ADMIN / WAREHOUSE_MANAGER.
+router.use(authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER", "SALES", "ACCOUNT"));
+
 
 // =====================================================
 // GET ALL GRN
@@ -116,6 +120,7 @@ router.post(
 
 router.post(
   "/:id/documents",
+  authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"),
   upload.single("file"),
   uploadGrnDocument
 );

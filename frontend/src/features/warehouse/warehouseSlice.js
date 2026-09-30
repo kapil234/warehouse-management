@@ -156,9 +156,20 @@ export const revokeWarehouseAccess = createAsyncThunk(
   }
 );
 
+// Restore the manager's last navbar choice after a page reload. It is checked
+// against the freshly fetched warehouse list in fetchWarehouses.fulfilled, so a
+// stale entry (other user / revoked access) falls back to the first warehouse.
+const getStoredSelectedWarehouse = () => {
+  try {
+    return JSON.parse(localStorage.getItem("selectedWarehouse")) || null;
+  } catch {
+    return null;
+  }
+};
+
 const initialState = {
   list: [],
-  selectedWarehouse: null,
+  selectedWarehouse: getStoredSelectedWarehouse(),
   loading: false,
   error: null,
   access: [],

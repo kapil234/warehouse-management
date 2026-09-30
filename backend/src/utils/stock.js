@@ -51,6 +51,8 @@ export async function getWarehouseStock(db, warehouseId, { excludeOutwardId } = 
     where: {
       min: {
         warehouseId,
+        // A rejected entry never leaves the warehouse, so it holds no stock.
+        status: { not: "REJECTED" },
         ...(excludeOutwardId ? { id: { not: excludeOutwardId } } : {}),
       },
     },

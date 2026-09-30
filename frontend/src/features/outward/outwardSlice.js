@@ -47,7 +47,7 @@ const initialState = {
 export const fetchOutwardList = createAsyncThunk(
   "outward/fetchList",
   async (
-    { warehouseId, search, type, dateFrom, dateTo, page = 1, pageSize = 20 } = {},
+    { warehouseId, search, type, status, dateFrom, dateTo, page = 1, pageSize = 20 } = {},
     { rejectWithValue }
   ) => {
     try {
@@ -56,6 +56,7 @@ export const fetchOutwardList = createAsyncThunk(
           ...(warehouseId ? { warehouseId } : {}),
           ...(search ? { search } : {}),
           ...(type ? { type } : {}),
+          ...(status ? { status } : {}),
           ...(dateFrom ? { dateFrom } : {}),
           ...(dateTo ? { dateTo } : {}),
           page,
@@ -174,6 +175,96 @@ export const createOutward = createAsyncThunk(
         errors: err.response?.data?.errors,
         duplicates: err.response?.data?.duplicates,
       });
+    }
+  }
+);
+
+// -------------------------------------------------
+// Workflow thunks
+//   Sales   -> uploadOutwardProof (payment proof of an item)
+//   Account -> approveOutward / rejectOutward
+//   Manager -> dispatchOutward
+// -------------------------------------------------
+
+// Uploads one payment-proof file and returns { fileKey, fileName, fileType }.
+export const uploadOutwardProof = createAsyncThunk(
+  "outward/uploadProof",
+  async ({ file }, { rejectWithValue }) => {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await apiClient.post("/api/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const uploaded = data.data || data;
+      return { fileKey: uploaded.fileKey, fileName: uploaded.fileName || file.name, fileType: uploaded.fileType || file.type };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to upload the file");
+    }
+  }
+);
+
+export const approveOutward = createAsyncThunk(
+  "outward/approve",
+  async ({ id, remarks }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.post(`/api/outward/${id}/approve`, { remarks });
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to approve");
+    }
+  }
+);
+
+export const rejectOutward = createAsyncThunk(
+  "outward/reject",
+  async ({ id, remarks }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.post(`/api/outward/${id}/reject`, { remarks });
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to reject");
+    }
+  }
+);
+
+export const dispatchOutward = createAsyncThunk(
+  "outward/dispatch",
+  async ({ id, payload }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.put(`/api/outward/${id}/dispatch`, payload);
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to save dispatch details");
+    }
+  }
+);
+
+// Super admin only: deletes a dispatched outward entry.
+export const deleteOutwardEntry = createAsyncThunk(
+  "outward/deleteEntry",
+  async (id, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.delete(`/api/outward/${id}`);
+      return { id, message: data?.message };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to delete outward entry");
+    }
+  }
+);
+
+// Opens the payment proof of one item in a new tab (Sales / Account / Admin only).
+export const downloadItemProof = createAsyncThunk(
+  "outward/downloadItemProof",
+  async ({ outwardId, itemId }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.get(`/api/outward/${outwardId}/items/${itemId}/proof`);
+      const url = data.data?.url;
+      if (!url) throw new Error("Download URL was not generated.");
+      window.open(url, "_blank", "noopener,noreferrer");
+      return { itemId };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message || "Unable to open the proof file.");
     }
   }
 );
@@ -350,6 +441,14 @@ const outwardSlice = createSlice({
         state.detailError = action.payload;
       })
 
+      // After approving, a leftover copy of the entry must not look "pending approval" any more,
+      // or the dispatch page would bounce the admin back to the details page.
+      .addCase(approveOutward.fulfilled, (state, action) => {
+        if (state.current && state.current.id === action.meta.arg.id) {
+          state.current.workflowStatus = "PENDING_DISPATCH";
+        }
+      })
+
       // ---------------- update ----------------
       .addCase(updateOutward.pending, (state) => {
         state.createStatus = "loading";
@@ -358,6 +457,8 @@ const outwardSlice = createSlice({
       .addCase(updateOutward.fulfilled, (state, action) => {
         state.createStatus = "succeeded";
         state.current = action.payload.data || action.payload;
+        // Force the details page to load the entry again (its status may have changed).
+        state.detailStatus = "idle";
       })
       .addCase(updateOutward.rejected, (state, action) => {
         state.createStatus = "failed";

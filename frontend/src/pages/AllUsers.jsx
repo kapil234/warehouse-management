@@ -40,11 +40,13 @@ const userCompanyIds = (user) => {
 const sameIds = (a, b) =>
   a.length === b.length && a.every((id) => b.includes(id));
 
-const ROLES = ["SUPER_ADMIN", "WAREHOUSE_MANAGER"];
+const ROLES = ["SUPER_ADMIN", "WAREHOUSE_MANAGER", "SALES", "ACCOUNT"];
 const roleLabel = (role) =>
   ({
     SUPER_ADMIN: "Super Admin",
     WAREHOUSE_MANAGER: "Warehouse Manager",
+    SALES: "Sales",
+    ACCOUNT: "Account",
   })[role] ||
   role ||
   "-";
