@@ -58,7 +58,8 @@ router.post("/:id/approve", authorize("SUPER_ADMIN", "ACCOUNT"), approveOutward)
 router.post("/:id/reject", authorize("SUPER_ADMIN", "ACCOUNT"), rejectOutward);
 
 // Warehouse manager fills vehicle / dispatch details.
-router.put("/:id/dispatch", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), dispatchOutward);
+// Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.
+router.put("/:id/dispatch", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.array("files", 10), dispatchOutward);
 
 // Payment proof of an item - never reachable by the warehouse manager.
 router.get("/:id/items/:itemId/proof", authorize("SUPER_ADMIN", "SALES", "ACCOUNT"), downloadItemProof);

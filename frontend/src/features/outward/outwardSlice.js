@@ -189,9 +189,12 @@ export const createOutward = createAsyncThunk(
 // Uploads one payment-proof file and returns { fileKey, fileName, fileType }.
 export const uploadOutwardProof = createAsyncThunk(
   "outward/uploadProof",
-  async ({ file }, { rejectWithValue }) => {
+  async ({ file, warehouseId, outwardId }, { rejectWithValue }) => {
     try {
       const formData = new FormData();
+      // Text fields go first so the server knows the target folder: min/<warehouse>/<outwardId>/
+      formData.append("warehouseId", warehouseId);
+      formData.append("outwardId", outwardId);
       formData.append("file", file);
       const { data } = await apiClient.post("/api/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -228,11 +231,24 @@ export const rejectOutward = createAsyncThunk(
   }
 );
 
+// `files` (optional): [{ file, docCategory }] - sent in the SAME request as the dispatch details,
+// so there is only one round trip instead of one per document.
 export const dispatchOutward = createAsyncThunk(
   "outward/dispatch",
-  async ({ id, payload }, { rejectWithValue }) => {
+  async ({ id, payload, files = [] }, { rejectWithValue }) => {
     try {
-      const { data } = await apiClient.put(`/api/outward/${id}/dispatch`, payload);
+      if (!files.length) {
+        const { data } = await apiClient.put(`/api/outward/${id}/dispatch`, payload);
+        return data;
+      }
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify(payload));
+      formData.append("categories", JSON.stringify(files.map((f) => f.docCategory)));
+      files.forEach((f) => formData.append("files", f.file));
+      const { data } = await apiClient.put(`/api/outward/${id}/dispatch`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000,
+      });
       return data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || "Failed to save dispatch details");

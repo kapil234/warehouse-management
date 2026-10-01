@@ -122,7 +122,7 @@ export function validateItemCost(item, label) {
       }`;
     }
   }
-  if (item.proofFileKey && !String(item.proofFileKey).startsWith("uploads/")) {
+  if (item.proofFileKey && !/^(min|uploads)\//.test(String(item.proofFileKey))) {
     return `${label}: invalid proof file`;
   }
   return null;
@@ -168,4 +168,22 @@ export function itemsFingerprint(items = []) {
       .map((row) => JSON.stringify(row))
       .sort()
   );
+}
+
+/**
+ * Storage layout (bucket warehouse-documents):
+ *
+ *   min/<outward number>/   payment proofs + delivery challan / e-way bill / photos ...
+ *
+ * A new entry has no outward number until it is saved, so a proof picked on the create form waits in
+ * uploads/<outward id>/ and is moved into min/<outward number>/ as soon as the entry is created.
+ */
+export const outwardFolder = (outwardNumber) => `min/${String(outwardNumber).replace(/[^a-zA-Z0-9._-]/g, "_")}/`;
+export const tempProofFolder = (minId) => `uploads/${String(minId).toLowerCase()}/`;
+
+/** A proof key must sit in this entry's own folder (final or temporary) - never in someone else's. */
+export function proofKeyProblem(items = [], minId, outwardNumber) {
+  const allowed = [tempProofFolder(minId), ...(outwardNumber ? [outwardFolder(outwardNumber)] : [])];
+  const bad = items.find((i) => i.proofFileKey && !allowed.some((f) => String(i.proofFileKey).startsWith(f)));
+  return bad ? "A payment proof does not belong to this entry. Please remove it and attach the file again." : null;
 }

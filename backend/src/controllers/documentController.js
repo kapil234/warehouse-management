@@ -1,7 +1,7 @@
 import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog } from "../utils/auditLog.js";
-import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS } from "../utils/outwardWorkflow.js";
+import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, outwardFolder } from "../utils/outwardWorkflow.js";
  
 // assertLinkedEntryAccess used to be 3 sequential round-trips (entry, then
 // its warehouse, then the caller's warehouse access) plus a 4th one later
@@ -22,7 +22,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
       warehouseId: true,
       ...(linkedType === "grn" ? {} : { status: true, createdById: true }),
       [numberField]: true,
-      warehouse: { select: { id: true, companyId: true, company: { select: { status: true } } } },
+      warehouse: { select: { id: true, code: true, companyId: true, company: { select: { status: true } } } },
     },
   });
   if (!entry) throw Object.assign(new Error(`${linkedType === "grn" ? "GRN" : "Outward entry"} not found.`), { status: 404 });
@@ -32,6 +32,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
   if (warehouse.company?.status === "Inactive") throw Object.assign(new Error("This warehouse belongs to an inactive company."), { status: 403 });
 
   entry.entryNumber = entry[numberField] || entry.id;
+  entry.warehouseCode = warehouse.code;
 
   if (req.user.role === "SUPER_ADMIN") {
     // The documents section only exists from dispatch details onwards.
@@ -71,7 +72,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
   return entry;
 }
  
-function sanitizeCategory(value) {
+export function sanitizeCategory(value) {
   return String(value || "Other").replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 80) || "Other";
 }
 function baseName(category) {
@@ -84,6 +85,39 @@ function baseName(category) {
   return "document";
 }
  
+
+// Uploads the files sent along with the dispatch request, all in parallel, into the outward's own
+// folder min/<outward number>/ (same place as the payment proofs). Nothing is kept if any of them fails.
+export async function storeOutwardFiles(files, categories, outwardNumber) {
+  const folder = outwardFolder(outwardNumber);
+  const stamp = Date.now();
+  const prepared = files.map((file, index) => {
+    const category = sanitizeCategory(categories[index]);
+    const clean = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/_+/g, "_");
+    const extension = clean.includes(".") ? clean.split(".").pop().toLowerCase() : "file";
+    const fileKey = `${folder}${baseName(category)}-${stamp}-${index}-${Math.round(Math.random() * 1e6)}.${extension}`;
+    return { file, category, fileKey };
+  });
+
+  const results = await Promise.all(
+    prepared.map(async (p) => {
+      const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(p.fileKey, p.file.buffer, {
+        contentType: p.file.mimetype, cacheControl: "3600", upsert: false,
+      });
+      return error ? { error } : null;
+    })
+  );
+  const failed = results.find(Boolean);
+  if (failed) {
+    const stored = prepared.filter((_, i) => !results[i]).map((p) => p.fileKey);
+    if (stored.length) await supabase.storage.from(SUPABASE_BUCKET).remove(stored).catch(() => {});
+    throw Object.assign(new Error(`Failed to upload file: ${failed.error.message}`), { status: 500 });
+  }
+  return prepared.map((p) => ({
+    docCategory: p.category, fileKey: p.fileKey, fileType: p.file.mimetype, fileSize: p.file.size, fileName: p.file.originalname,
+  }));
+}
+
 // Document.linkedType uses "grn" / "outward"; AuditLog.entityType uses
 // "INWARD" / "OUTWARD" — keep the mapping in one place.
 const AUDIT_ENTITY_TYPE = { grn: "INWARD", outward: "OUTWARD" };
@@ -96,6 +130,11 @@ async function uploadLinkedDocument(req, res, linkedType) {
     const id = req.params.id;
     const permission = linkedType === "grn" ? "canInward" : "canOutward";
     const entry = await assertLinkedEntryAccess(req, linkedType, id, permission);
+
+    // Dispatch documents are saved only once the entry has been dispatched.
+    if (linkedType === "outward" && entry.status !== STATUS.DISPATCHED) {
+      return res.status(409).json({ message: "Documents can be saved only after the entry is dispatched." });
+    }
  
     const category = sanitizeCategory(req.body.docCategory);
     const file = req.file;
@@ -115,7 +154,9 @@ async function uploadLinkedDocument(req, res, linkedType) {
     // down to the same "invoice" prefix — both then computed count=0 and
     // collided on the same storage key, so only the first upload survived.
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-    const fileKey = `${prefix}/${entryNumber}/${baseName(category)}-${uniqueSuffix}.${extension}`;
+    // Outward documents sit in the same folder as the item payment proofs: min/<outward number>/
+    const folder = linkedType === "outward" ? outwardFolder(entryNumber) : `${prefix}/${entryNumber}/`;
+    const fileKey = `${folder}${baseName(category)}-${uniqueSuffix}.${extension}`;
  
     const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).upload(fileKey, file.buffer, {
       contentType: fileType, cacheControl: "3600", upsert: false,

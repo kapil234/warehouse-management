@@ -21,8 +21,11 @@ const sameCategory = (a, b) => String(a || "").trim().toLowerCase() === String(b
  *
  *   canManage = true  -> Add document, Upload, Replace, Delete, Download
  *   canManage = false -> Download only (uploaded documents only)
+ *
+ *   deferred = true   -> before dispatch: picked files are only kept in the page
+ *                        (stagedFiles / onStagedChange) and are sent together with the dispatch details.
  */
-export default function OutwardDocuments({ outwardId, documents = [], canManage = false }) {
+export default function OutwardDocuments({ outwardId, documents = [], canManage = false, deferred = false, stagedFiles = [], onStagedChange }) {
   const dispatch = useDispatch();
   const docActionStatus = useSelector(selectOutwardDocActionStatus);
   const uploadingDocs = useSelector(selectOutwardUploadingDocs);
@@ -45,10 +48,26 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
     return true;
   };
 
+  // Deferred mode: remember the file (replacing any earlier pick for the same row) instead of uploading it.
+  const stageFile = (docCategory, file) => {
+    const next = [
+      ...stagedFiles.filter((f) => !sameCategory(f.docCategory, docCategory)),
+      { id: crypto.randomUUID(), docCategory, file },
+    ];
+    onStagedChange?.(next);
+  };
+  const unstageFile = (docCategory) => onStagedChange?.(stagedFiles.filter((f) => !sameCategory(f.docCategory, docCategory)));
+
   const handleUpload = (event, docCategory) => {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!validFile(file, event)) return;
+
+    if (deferred) {
+      stageFile(docCategory, file);
+      event.target.value = "";
+      return;
+    }
 
     dispatch(uploadOutwardDocument({ outwardId, file, docCategory })).then((result) => {
       if (uploadOutwardDocument.fulfilled.match(result)) {
@@ -66,6 +85,12 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
     const file = event.target.files?.[0];
     if (!file) return;
     if (!validFile(file, event)) return;
+
+    if (deferred) {
+      stageFile(docCategory, file);
+      event.target.value = "";
+      return;
+    }
 
     dispatch(uploadOutwardDocument({ outwardId, file, docCategory })).then(async (result) => {
       if (!uploadOutwardDocument.fulfilled.match(result)) {
@@ -94,7 +119,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
       label = name.trim();
     }
 
-    const existingCount = documents.filter((doc) =>
+    const existingCount = [...documents, ...stagedFiles].filter((doc) =>
       String(doc.docCategory || "").trim().toLowerCase().startsWith(label.toLowerCase())
     ).length;
 
@@ -135,22 +160,29 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
   const extraDocuments = documents.filter(
     (doc) => !requiredLower.includes(String(doc.docCategory || "").trim().toLowerCase())
   );
+  const stagedFor = (label) => stagedFiles.find((f) => sameCategory(f.docCategory, label));
+  const extraStaged = stagedFiles.filter((f) => !requiredLower.includes(String(f.docCategory || "").trim().toLowerCase()));
   const documentRows = [
     ...REQUIRED_DOCUMENTS.map((label) => ({
       key: label,
       label,
       document: documents.find((doc) => sameCategory(doc.docCategory, label)),
+      staged: stagedFor(label),
       required: true,
     })),
     ...extraDocuments.map((doc) => ({
       key: doc.id,
       label: doc.docCategory || "Document",
       document: doc,
+      staged: stagedFor(doc.docCategory),
       required: false,
     })),
+    ...extraStaged
+      .filter((f) => !extraDocuments.some((doc) => sameCategory(doc.docCategory, f.docCategory)))
+      .map((f) => ({ key: `staged-${f.id}`, label: f.docCategory, document: undefined, staged: f, required: false })),
   ];
 
-  const uploadedCategories = documents.map((doc) => String(doc.docCategory || "").trim().toLowerCase());
+  const uploadedCategories = [...documents, ...stagedFiles].map((doc) => String(doc.docCategory || "").trim().toLowerCase());
   const allUploaded = REQUIRED_DOCUMENTS.every((label) => {
     const required = label.toLowerCase();
     return uploadedCategories.some((v) => v === required || v.startsWith(`${required} #`) || v.startsWith(`${required} `));
@@ -211,7 +243,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
         {rows.length === 0 && (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-gray-500">No documents uploaded yet.</p>
         )}
-        {rows.map(({ label, document, required, key }) => {
+        {rows.map(({ label, document, required, key, staged }) => {
           const isUploadingThis = uploadingDocs[label] === true;
           const isDownloading = document && docActionStatus[document.id] === "downloading";
           const isDeleting = document && docActionStatus[document.id] === "deleting";
@@ -223,7 +255,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
                 <div className="flex items-center gap-2.5 min-w-0 sm:gap-3">
                   <div
                     className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 sm:w-10 sm:h-10 ${
-                      document ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"
+                      document || staged ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-400"
                     }`}
                   >
                     <FileText size={18} className="sm:hidden" />
@@ -232,10 +264,19 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
 
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 sm:text-base">{label}</p>
+                    {document && staged && (
+                      <p className="text-[11px] text-amber-600 truncate mt-1 sm:text-xs">
+                        New file: {staged.file.name} {" • "} replaces this one
+                      </p>
+                    )}
                     {document ? (
                       <p className="text-[11px] text-gray-500 truncate mt-1 sm:text-xs">
                         {document.fileName || (document.fileKey ? String(document.fileKey).split("/").pop() : "Document")} {" • "} {document.fileType || "File"} {" • "}
                         {(Number(document.fileSize || 0) / 1024).toFixed(1)} {" KB"}
+                      </p>
+                    ) : staged ? (
+                      <p className="text-[11px] text-amber-600 truncate mt-1 sm:text-xs">
+                        {staged.file.name} {" • "} {(staged.file.size / 1024).toFixed(1)} {" KB"}
                       </p>
                     ) : (
                       <p className="text-[11px] text-red-500 mt-1 sm:text-xs">Not uploaded</p>
@@ -288,6 +329,23 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
                           </button>
                         </>
                       )}
+                    </>
+                  ) : staged && canManage ? (
+                    <>
+                      <label className="cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-gray-50 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm" title="Replace">
+                        <RefreshCw size={16} />
+                        <span className="hidden sm:inline">Replace</span>
+                        <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(event) => handleUpload(event, label)} />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => unstageFile(label)}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
+                        title="Remove"
+                      >
+                        <Trash2 size={16} />
+                        <span className="hidden sm:inline">Remove</span>
+                      </button>
                     </>
                   ) : required && canManage ? (
                     <label

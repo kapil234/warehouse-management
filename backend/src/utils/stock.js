@@ -38,17 +38,23 @@ export const stockKey = (category, sku) =>
  *
  * Returns Map<stockKey, { category, sku, uom, inward, outward, available }>.
  */
-export async function getWarehouseStock(db, warehouseId, { excludeOutwardId } = {}) {
+export async function getWarehouseStock(db, warehouseId, { excludeOutwardId, onlyItems } = {}) {
+  // Create / edit only need the models being requested - reading the whole warehouse history is wasted time.
+  // (Matched case-insensitively and loosely, so stray spaces in old rows still count; exact keys are compared afterwards.)
+  const skuFilter = Array.isArray(onlyItems) && onlyItems.length
+    ? { OR: [...new Set(onlyItems.map((i) => String(i.sku || "").trim()).filter(Boolean))].map((sku) => ({ sku: { contains: sku, mode: "insensitive" } })) }
+    : {};
   // Sequential on purpose: inside an interactive transaction the queries
   // share one connection anyway.
   const inwardGroups = await db.grnItem.groupBy({
     by: ["category", "sku", "uom"],
-    where: { grn: { warehouseId } },
+    where: { grn: { warehouseId }, ...skuFilter },
     _sum: { quantity: true },
   });
   const outwardGroups = await db.minItem.groupBy({
     by: ["category", "sku", "uom"],
     where: {
+      ...skuFilter,
       min: {
         warehouseId,
         // A rejected entry never leaves the warehouse, so it holds no stock.

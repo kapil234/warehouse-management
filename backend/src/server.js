@@ -4,9 +4,26 @@ import prisma from "./config/prisma.js";
 
 const PORT = process.env.PORT || 4000;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The remote database is sometimes unreachable for a few seconds. Retry the first
+// connection instead of crashing, so nodemon doesn't need a manual restart.
+async function connectWithRetry(maxAttempts = 8) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await prisma.$connect();
+      return;
+    } catch (error) {
+      if (attempt >= maxAttempts) throw error;
+      console.warn(`Database not reachable (attempt ${attempt}/${maxAttempts}). Retrying in ${attempt * 2}s...`);
+      await sleep(attempt * 2000);
+    }
+  }
+}
+
 const startServer = async () => {
   try {
-    await prisma.$connect();
+    await connectWithRetry();
 
     console.log("PostgreSQL connected successfully");
 

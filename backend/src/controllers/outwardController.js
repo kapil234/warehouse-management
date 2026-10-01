@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog, recordAuditLogs, diffFields, diffItems, describeItem } from "../utils/auditLog.js";
+import { storeOutwardFiles } from "./documentController.js";
+import { outwardFolder } from "../utils/outwardWorkflow.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
 import { getWarehouseStock, findShortages, shortageMessage } from "../utils/stock.js";
 import {
@@ -17,6 +20,7 @@ import {
   shapeForFinance,
   validateItemCost,
   toItemRow,
+  proofKeyProblem,
 } from "../utils/outwardWorkflow.js";
 
 const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "E-way bill", "Dispatch photo"];
@@ -378,6 +382,26 @@ function validateSalesPayload(data, items) {
 const costFingerprint = (i) => JSON.stringify([Number(i.cost ?? 0), i.costStatus || null, i.utrNumber || null, Boolean(i.proofFileKey)]);
 const itemMatchKey = (i) => [i.category, i.sku, i.uom].join("::").toLowerCase();
 
+
+// Moves proofs that were picked before the entry existed (uploads/<id>/...) into min/<outward number>/.
+// Runs in parallel; a proof that fails to move simply stays where it is (it still downloads fine).
+async function moveTempProofs(minId, outwardNumber) {
+  const rows = await prisma.minItem.findMany({
+    where: { minId, proofFileKey: { startsWith: "uploads/" } },
+    select: { id: true, proofFileKey: true },
+  });
+  if (!rows.length) return;
+  const folder = outwardFolder(outwardNumber);
+  await Promise.all(
+    rows.map(async (row) => {
+      const target = `${folder}${row.proofFileKey.split("/").pop()}`;
+      const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(row.proofFileKey, target);
+      if (error) return console.error("Proof move failed:", row.proofFileKey, error.message);
+      await prisma.minItem.update({ where: { id: row.id }, data: { proofFileKey: target } });
+    })
+  );
+}
+
 // ---------------------------------------------------------------------------
 // CREATE  (Sales, Super admin)  ->  status PENDING_APPROVAL
 // ---------------------------------------------------------------------------
@@ -394,6 +418,13 @@ export async function createOutward(req, res) {
     }
     const problem = validateSalesPayload(data, items);
     if (problem) return res.status(422).json({ message: problem });
+
+    // The id is chosen up front so the payment proofs could be uploaded straight into
+    // min/<warehouse code>/<id>/ before the entry exists.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const newMinId = UUID_RE.test(String(data.id || "")) ? String(data.id).toLowerCase() : randomUUID();
+    const proofProblem = proofKeyProblem(items, newMinId);
+    if (proofProblem) return res.status(422).json({ message: proofProblem });
 
     const [unknownItems, outwardCount] = await Promise.all([
       findUnknownProducts(items),
@@ -412,12 +443,13 @@ export async function createOutward(req, res) {
       try {
         created = await prisma.$transaction(async (tx) => {
           // Stock is reserved as soon as Sales submits (rejected entries release it again).
-          const stock = await getWarehouseStock(tx, warehouse.id);
+          const stock = await getWarehouseStock(tx, warehouse.id, { onlyItems: items });
           const shortages = findShortages(items, stock);
           if (shortages.length) throw httpError(422, shortageMessage(shortages));
 
           return tx.min.create({
             data: {
+              id: newMinId,
               outwardNumber,
               warehouseId: warehouse.id,
               outwardType: data.outwardType,
@@ -440,6 +472,8 @@ export async function createOutward(req, res) {
         throw err;
       }
     }
+
+    await moveTempProofs(created.id, created.outwardNumber);
 
     const [result] = await Promise.all([
       prisma.min.findUnique({ where: { id: created.id }, include: { items: true, referenceDocuments: true } }),
@@ -503,6 +537,8 @@ export async function updateOutward(req, res) {
     }
 
     const warehouse = await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
+    const proofProblem = proofKeyProblem(items, id, existing.outwardNumber);
+    if (proofProblem) return res.status(422).json({ message: proofProblem });
     if (!data.companyId || warehouse.companyId !== data.companyId) {
       return res.status(400).json({ message: "Selected company does not match this warehouse." });
     }
@@ -579,7 +615,7 @@ export async function updateOutward(req, res) {
       const resubmit = current.status === STATUS.PENDING_APPROVAL || wasRejected || wasApproved;
       sentForApproval = resubmit;
 
-      const stock = await getWarehouseStock(tx, existing.warehouseId, { excludeOutwardId: id });
+      const stock = await getWarehouseStock(tx, existing.warehouseId, { excludeOutwardId: id, onlyItems: [...newItems, ...existing.items] });
       const shortages = findShortages(newItems, stock, existing.items);
       if (shortages.length) throw httpError(422, shortageMessage(shortages));
 
@@ -730,7 +766,19 @@ export async function rejectOutward(req, res) {
 export async function dispatchOutward(req, res) {
   try {
     const { id } = req.params;
-    const data = req.body;
+    // JSON body, or multipart: payload (JSON string) + files + categories (JSON array, one per file).
+    let data = req.body || {};
+    let categories = [];
+    if (typeof data.payload === "string") {
+      try {
+        categories = JSON.parse(data.categories || "[]");
+        data = JSON.parse(data.payload);
+      } catch {
+        return res.status(422).json({ message: "Invalid dispatch data" });
+      }
+    }
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length !== categories.length && files.length) return res.status(422).json({ message: "Each document needs a name" });
     const references = Array.isArray(data.referenceDocuments) ? data.referenceDocuments : [];
 
     const existing = await prisma.min.findUnique({
@@ -743,7 +791,7 @@ export async function dispatchOutward(req, res) {
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
 
-    await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
+    const warehouse = await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
     // The warehouse manager (and super admin) fill the dispatch details and can keep updating them
     // after dispatch: reference documents, dispatch mode, vehicle number, remarks (documents via upload).
     const allowedStatuses = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED];
@@ -774,33 +822,64 @@ export async function dispatchOutward(req, res) {
       ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "remarks"])
       : [];
 
+    // Files go to storage first (in parallel); the database write below then saves the dispatch
+    // details and the document rows together in one go.
+    const uploaded = files.length ? await storeOutwardFiles(files, categories, existing.outwardNumber) : [];
+    let replaced = [];
+
     // Guarded write: only applies while the entry is still in a status this user may dispatch from
     // (Sales / Account may have pulled it back for re-approval in the meantime).
-    await prisma.$transaction(async (tx) => {
-      const { count } = await tx.min.updateMany({
-        where: { id, status: { in: allowedStatuses } },
-        data: {
-          ...newSnapshot,
-          ...(data.outwardDateTime ? { refDocDate: new Date(data.outwardDateTime) } : {}),
-          status: STATUS.DISPATCHED,
-          // Who / when dispatched is set once, on the first save only.
-          ...(existing.status === STATUS.PENDING_DISPATCH
-            ? { dispatchedById: req.user.id, dispatchedByName: req.user.name, dispatchedAt: new Date() }
-            : {}),
-        },
+    try {
+      await prisma.$transaction(async (tx) => {
+        const { count } = await tx.min.updateMany({
+          where: { id, status: { in: allowedStatuses } },
+          data: {
+            ...newSnapshot,
+            ...(data.outwardDateTime ? { refDocDate: new Date(data.outwardDateTime) } : {}),
+            status: STATUS.DISPATCHED,
+            // Who / when dispatched is set once, on the first save only.
+            ...(existing.status === STATUS.PENDING_DISPATCH
+              ? { dispatchedById: req.user.id, dispatchedByName: req.user.name, dispatchedAt: new Date() }
+              : {}),
+          },
+        });
+        if (!count) throw httpError(409, "This entry is not ready for dispatch");
+        await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: {}, create: normalizedRefs } } });
+
+        if (uploaded.length) {
+          // A new file for a document that already exists replaces it.
+          const names = new Set(uploaded.map((u) => u.docCategory.trim().toLowerCase()));
+          const old = await tx.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { id: true, fileKey: true, docCategory: true } });
+          replaced = old.filter((d) => names.has(String(d.docCategory || "").trim().toLowerCase()));
+          if (replaced.length) await tx.document.deleteMany({ where: { id: { in: replaced.map((d) => d.id) } } });
+          await tx.document.createMany({
+            data: uploaded.map((u) => ({
+              linkedType: "outward", linkedId: id, docCategory: u.docCategory,
+              fileKey: u.fileKey, fileType: u.fileType, fileSize: u.fileSize, uploadedById: req.user.id,
+            })),
+          });
+        }
       });
-      if (!count) throw httpError(409, "This entry is not ready for dispatch");
-      await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: {}, create: normalizedRefs } } });
-    });
+    } catch (txError) {
+      if (uploaded.length) await supabase.storage.from(SUPABASE_BUCKET).remove(uploaded.map((u) => u.fileKey)).catch(() => {});
+      throw txError;
+    }
+    if (replaced.length) supabase.storage.from(SUPABASE_BUCKET).remove(replaced.map((d) => d.fileKey)).catch((err) => console.error("Old document cleanup failed:", err));
 
     const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
     const entries = existing.status === STATUS.PENDING_DISPATCH
       ? [{ ...base, action: "DISPATCHED", description: `Dispatched (${data.dispatchMode}${newSnapshot.vehicleNumber ? `, ${newSnapshot.vehicleNumber}` : ""})` }]
       : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
-    if (entries.length) await recordAuditLogs(prisma, entries);
+    for (const u of uploaded) {
+      entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
+    }
+    // The save already succeeded - the audit trail is written in the background.
+    if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (dispatch) failed:", err));
 
-    const result = await prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } });
-    const documents = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } });
+    const [result, documents] = await Promise.all([
+      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
+      prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
+    ]);
     return res.json({ message: "Dispatch details saved", data: finishFor(req, result, documents) });
   } catch (error) {
     console.error("Dispatch outward error:", error);

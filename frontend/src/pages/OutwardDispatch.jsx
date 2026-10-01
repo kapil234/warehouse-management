@@ -56,6 +56,8 @@ export default function OutwardDispatch() {
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
+  // Documents picked here are sent together with the dispatch details when the form is saved.
+  const [stagedDocs, setStagedDocs] = useState([]);
   const submittingRef = useRef(false); // stops the "already dispatched" redirect firing during our own save
   const [filled, setFilled] = useState(false);
   // Super admin can reject from here (reason required); it then shows Approve again on the details page.
@@ -149,6 +151,7 @@ export default function OutwardDispatch() {
     const result = await dispatch(
       dispatchOutward({
         id,
+        files: stagedDocs.map((d) => ({ file: d.file, docCategory: d.docCategory })),
         payload: {
           outwardDateTime: dispatchDateTime,
           dispatchMode,
@@ -343,7 +346,7 @@ export default function OutwardDispatch() {
             </div>
           </section>
 
-          <OutwardDocuments outwardId={id} documents={outward.documents || []} canManage />
+          <OutwardDocuments outwardId={id} documents={outward.documents || []} canManage deferred={!alreadyDispatched} stagedFiles={stagedDocs} onStagedChange={setStagedDocs} />
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
             <label className={labelCls}>Dispatch remarks</label>

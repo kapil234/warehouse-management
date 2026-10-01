@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Paperclip, Plus, Trash2, Loader2, X } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
@@ -92,6 +92,10 @@ export default function OutwardForm() {
   const [originalItems, setOriginalItems] = useState([]);
   const [rejection, setRejection] = useState(null); // { by, remarks } when Account sent it back
   const [proofUploadingId, setProofUploadingId] = useState(null);
+  // A new entry gets its id up front, so a payment proof is uploaded straight into
+  // min/<warehouse code>/<outward id>/ and nothing is saved anywhere else.
+  const newEntryId = useRef(crypto.randomUUID());
+  const outwardId = editId || newEntryId.current;
   const [loadingEntry, setLoadingEntry] = useState(isEdit);
   // Workflow status of the entry being edited (approved entries can still be edited before dispatch).
   const [entryStatus, setEntryStatus] = useState(null);
@@ -150,6 +154,13 @@ export default function OutwardForm() {
     ? entryWarehouse
     : companyWarehouses.find((w) => w.id === pickedWarehouseId) || null;
   const warehouseId = selectedWarehouse?.id || "";
+
+  // New entry: a proof was saved under the previously selected warehouse's folder, so drop it
+  // when the warehouse changes and let the user attach it again.
+  useEffect(() => {
+    if (isEdit) return;
+    setItems((prev) => (prev.some((i) => i.proof) ? prev.map((i) => (i.proof ? { ...i, proof: null } : i)) : prev));
+  }, [warehouseId, isEdit]);
   const companyName =
     selectedWarehouse?.company?.name || companyOptions.find((c) => c.id === selectedCompanyId)?.name || "";
 
@@ -273,8 +284,10 @@ export default function OutwardForm() {
     if (file.size > 10 * 1024 * 1024) return toast.error("File size must be less than 10 MB.");
     if (!PROOF_TYPES.includes(file.type)) return toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
 
+    if (!warehouseId) return toast.error("Please select a warehouse before attaching a payment proof.");
+
     setProofUploadingId(itemId);
-    const result = await dispatch(uploadOutwardProof({ file }));
+    const result = await dispatch(uploadOutwardProof({ file, warehouseId, outwardId }));
     setProofUploadingId(null);
     if (uploadOutwardProof.fulfilled.match(result)) {
       patchItem(itemId, { proof: result.payload, keepProof: false });
@@ -324,6 +337,7 @@ export default function OutwardForm() {
     }
 
     const payload = {
+      ...(isEdit ? {} : { id: outwardId }),
       warehouseId,
       companyId: selectedCompanyId,
       outwardType,

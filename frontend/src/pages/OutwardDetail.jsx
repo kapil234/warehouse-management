@@ -166,7 +166,8 @@ export default function OutwardDetail() {
   const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));
   // Documents: add / upload / replace / delete for the warehouse manager (before and after dispatch)
   // and for the Super admin. Sales / Account never see the section for editing.
-  const canManageDocs = isSuperAdmin || isWarehouse;
+  // Documents are saved only after dispatch - before that the dispatch page keeps the picked files.
+  const canManageDocs = (isSuperAdmin || isWarehouse) && dispatched;
   // The super admin does not see the documents section at the approval stage;
   // it appears with the dispatch details and stays after dispatch.
   const docsStage = !isSuperAdmin || awaitingDispatch || dispatched;
