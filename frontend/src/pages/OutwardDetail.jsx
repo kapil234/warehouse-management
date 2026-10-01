@@ -160,7 +160,7 @@ export default function OutwardDetail() {
   // the Super admin's Update button does everything (sales info, cost, items and dispatch details);
   // the warehouse manager can still update the dispatch details, documents and vehicle number.
   // Sales can view entries the super admin created for their company, but only edit their own.
-  const canEdit = isSuperAdmin || (isSales && outward.createdBy?.role !== "SUPER_ADMIN" && ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(workflow));
+  const canEdit = isSuperAdmin || (isSales && ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(workflow));
   const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED"].includes(workflow);
   const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
   const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));

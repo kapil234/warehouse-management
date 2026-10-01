@@ -399,26 +399,18 @@ export default function OutwardForm() {
           <div>
             <h1 className="text-base font-semibold text-gray-900 md:text-lg">{isEdit ? "Edit outward entry" : "New outward entry"}</h1>
             <p className="text-xs text-gray-400">
-              {alreadyApproved && !isSuperAdmin
-                ? "Update the details. Cost or item changes need Account approval again."
-                : isEdit
+              {isEdit
                 ? "Update the details and send them for approval again"
                 : "Fill the customer and item details. It goes to the Account team for approval."}
             </p>
           </div>
         </div>
 
-        {alreadyApproved && isSuperAdmin && (
+        {alreadyApproved && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            This entry is approved and waiting for dispatch. Saving your changes sends it back for approval; once it is approved again you can fill the dispatch details.
+            This entry is approved and waiting for dispatch. Saving any change sends it back to the Account team for approval, and the warehouse will not see it until it is approved again.
           </div>
         )}
-        {alreadyApproved && !isSuperAdmin && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-            This entry is already approved and waiting for dispatch. If you change any item, quantity, UOM or cost detail, it goes back to the Account team and the warehouse will not see it until it is approved again. Changing only the customer, company or type keeps it approved.
-          </div>
-        )}
-
         {rejection && (
           <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <p className="font-semibold">Rejected by Account{rejection.by ? ` (${rejection.by})` : ""}</p>
@@ -669,7 +661,7 @@ export default function OutwardForm() {
           )}
 
           <button type="submit" disabled={saving || proofUploadingId !== null} className="w-full rounded-lg bg-gray-900 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-40">
-            {saving ? "Saving..." : alreadyApproved ? "Save changes" : isEdit ? "Save and send for approval" : "Submit for approval"}
+            {saving ? "Saving..." : isEdit ? "Save and send for approval" : "Submit for approval"}
           </button>
         </form>
       </div>

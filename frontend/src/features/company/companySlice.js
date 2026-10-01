@@ -25,6 +25,20 @@ const initialState = {
 // GET /api/companies
 // =====================================================
 
+export const fetchPublicCompanies = createAsyncThunk(
+  "company/fetchPublic",
+  async (_, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.get("/api/auth/companies");
+      return data;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.message || "Failed to fetch companies"
+      );
+    }
+  }
+);
+
 export const fetchCompanies = createAsyncThunk(
   "company/fetchAll",
 
@@ -149,6 +163,12 @@ const companySlice = createSlice({
 
         // Support either a bare array or { data: [...] } response shapes,
         // same as the users endpoint.
+        state.list = Array.isArray(action.payload)
+          ? action.payload
+          : action.payload?.data || [];
+      })
+
+      .addCase(fetchPublicCompanies.fulfilled, (state, action) => {
         state.list = Array.isArray(action.payload)
           ? action.payload
           : action.payload?.data || [];

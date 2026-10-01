@@ -489,7 +489,14 @@ export async function updateOutward(req, res) {
 
     const isAdmin = req.user.role === "SUPER_ADMIN";
     if (!isAdmin) {
-      if (existing.createdById !== req.user.id) return res.status(403).json({ message: "You can only edit outward entries you created" });
+      // Sales can edit entries they created themselves, or entries created by the super admin
+      // (company access is still enforced below by assertWarehouseAccess).
+      if (existing.createdById !== req.user.id) {
+        const creator = await prisma.user.findUnique({ where: { id: existing.createdById }, select: { role: true } });
+        if (creator?.role !== "SUPER_ADMIN") {
+          return res.status(403).json({ message: "You can only edit outward entries you created or that the admin created" });
+        }
+      }
       if (!SALES_EDITABLE_STATUSES.includes(existing.status)) {
         return res.status(409).json({ message: "This entry has been dispatched and can no longer be edited" });
       }
@@ -556,7 +563,6 @@ export async function updateOutward(req, res) {
       return !o || costFingerprint(o) !== costFingerprint(n);
     });
 
-    const detailsChanged = itemsFingerprint(existing.items) !== itemsFingerprint(newItems);
     let sentForApproval = false;
 
     await prisma.$transaction(async (tx) => {
@@ -568,10 +574,9 @@ export async function updateOutward(req, res) {
       }
       const wasRejected = current.status === STATUS.REJECTED;
       const wasApproved = current.status === STATUS.PENDING_DISPATCH;
-      // Cost / item edits on an approved (not yet dispatched) entry by Sales, and ANY update by the
-      // super admin, go back for approval again. A dispatched entry edited by the super admin keeps its status.
-      const resubmit =
-        current.status === STATUS.PENDING_APPROVAL || wasRejected || (wasApproved && (detailsChanged || isAdmin));
+      // ANY update (Sales or super admin) on an approved, not-yet-dispatched entry sends it back for
+      // approval again. A dispatched entry edited by the super admin keeps its status.
+      const resubmit = current.status === STATUS.PENDING_APPROVAL || wasRejected || wasApproved;
       sentForApproval = resubmit;
 
       const stock = await getWarehouseStock(tx, existing.warehouseId, { excludeOutwardId: id });
@@ -619,7 +624,7 @@ export async function updateOutward(req, res) {
       }
       if (costChanged) entries.push({ ...base, action: "COST_UPDATED", description: "Cost details updated" });
       if (wasRejected) entries.push({ ...base, action: "RESUBMITTED", description: "Resubmitted for account approval" });
-      else if (wasApproved && (detailsChanged || isAdmin)) entries.push({ ...base, action: "RESUBMITTED", description: "Cost / item details changed after approval - sent for account approval again" });
+      else if (wasApproved) entries.push({ ...base, action: "RESUBMITTED", description: "Updated after approval - sent for account approval again" });
       if (!entries.length) entries.push({ ...base, action: "UPDATED", description: "Outward entry saved with no field changes" });
       await recordAuditLogs(tx, entries);
     }, STOCK_TRANSACTION_OPTIONS);

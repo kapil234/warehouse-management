@@ -4,7 +4,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { ArrowLeft, Eye, EyeOff, Package, UserPlus } from "lucide-react";
 import { signupUser, createUser, selectAuthStatus, selectAuthError } from "../features/auth/authSlice";
 import { fetchWarehouses, selectWarehouses } from "../features/warehouse/warehouseSlice";
-import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
+import { fetchCompanies, fetchPublicCompanies, selectAllCompanies } from "../features/company/companySlice";
 import CompanyMultiSelect from "../components/CompanyMultiSelect";
 
 const ROLES = [
@@ -45,14 +45,17 @@ export default function Signup() {
 
   const availableRoles = useMemo(() => {
     if (isAddingForCompany) return ROLES.filter((r) => r.value === "WAREHOUSE_MANAGER");
-    if (isSuperAdmin) return ROLES;
-    return ROLES.filter((r) => r.value === "SUPER_ADMIN");
-  }, [isAddingForCompany, isSuperAdmin]);
+    // Public signup and Super Admin both see all four roles.
+    return ROLES;
+  }, [isAddingForCompany]);
 
   const wantsWarehouses = canLoadWarehouses && role === "WAREHOUSE_MANAGER";
 
   useEffect(() => {
+    // Super Admin uses the full company list; public signup uses the
+    // lightweight public list (id + name only) so non-admin roles can pick a company.
     if (isSuperAdmin) dispatch(fetchCompanies());
+    else dispatch(fetchPublicCompanies());
   }, [dispatch, isSuperAdmin]);
 
   // One request for every warehouse; they're grouped by the selected
@@ -210,7 +213,7 @@ export default function Signup() {
             {errors.role && <p className="mt-1 text-xs text-red-600">{errors.role}</p>}
           </label>
 
-          {role !== "SUPER_ADMIN" && isSuperAdmin && (
+          {role !== "SUPER_ADMIN" && (
             <CompanyMultiSelect
               companies={selectableCompanies}
               value={companyIds}

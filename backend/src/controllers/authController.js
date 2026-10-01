@@ -862,3 +862,23 @@ export async function deleteUser(req, res) {
     });
   }
 }
+
+
+// =====================================================
+// GET /api/auth/companies
+// Public — id + name of active companies only, so the signup
+// page can let non-Super-Admin roles choose their company.
+// =====================================================
+export async function listPublicCompanies(req, res) {
+  try {
+    const companies = await prisma.company.findMany({
+      where: { status: { not: "Inactive" } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    return res.json({ data: companies });
+  } catch (error) {
+    console.error("List public companies error:", error);
+    return res.status(500).json({ message: "Something went wrong while fetching companies" });
+  }
+}
