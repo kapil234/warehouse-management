@@ -16,17 +16,7 @@ import {
 import { fetchWarehouses, selectWarehouses } from "../features/warehouse/warehouseSlice";
 import { getWarehousePermissions } from "../features/warehouse/warehousePermissions";
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
-import {
-  COST_STATUS_OPTIONS,
-  formatMoney,
-  isPlaceholder,
-  ACCOUNT_REF_TYPES,
-  MANAGER_REF_TYPES,
-  ACCOUNT_REQUIRED_DOCUMENTS,
-  ACCOUNT_DOC_PREFIX,
-  isAccountRef,
-  isAccountDocCategory,
-} from "../features/outward/outwardHelpers";
+import { COST_STATUS_OPTIONS, formatMoney, isPlaceholder } from "../features/outward/outwardHelpers";
 import useProducts from "../features/product/useProducts";
 import useOutwardStock, { stockKey } from "../features/outward/useOutwardStock";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
@@ -37,10 +27,6 @@ import OutwardDocuments from "../components/OutwardDocuments";
  * =========================================================
  * OUTWARD FORM  (Sales, Super admin)
  * =========================================================
- * After dispatch the Super admin's Update shows every team's part in order:
- * Sales (customer + items) -> Account (invoice reference + documents) ->
- * Warehouse manager (dispatch details, reference documents, documents, remarks).
- *
  * Sales fills the customer details and the item details, including the
  * cost of every item:
  *
@@ -78,12 +64,7 @@ const newItem = () => ({
   savedProofName: "",
 });
 
-// Account's references are Invoice / Other (Accounts); the warehouse manager's are Delivery Challan / Return Note / Other.
-const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
-const newManagerRef = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "", ewayBillNumber: "" });
-// Entries saved earlier may hold an "E-way Bill" reference. It is no longer shown or offered,
-// but it is kept as it is when the entry is saved.
-const isLegacyEwayRef = (r) => /e-?way/i.test(String(r?.refDocType || ""));
+const newReference = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
 
 const PROOF_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -131,15 +112,10 @@ export default function OutwardForm() {
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [dispatchRemarks, setDispatchRemarks] = useState("");
-  const [accountRefs, setAccountRefs] = useState([newAccountRef()]);
-  const [managerRefs, setManagerRefs] = useState([newManagerRef()]);
-  const [legacyRefs, setLegacyRefs] = useState([]);
-  const updateAccountRef = (rid, field, value) => setAccountRefs((p) => p.map((r) => (r.id === rid ? { ...r, [field]: value } : r)));
-  const addAccountRef = () => setAccountRefs((p) => [...p, newAccountRef()]);
-  const removeAccountRef = (rid) => setAccountRefs((p) => (p.length === 1 ? [newAccountRef()] : p.filter((r) => r.id !== rid)));
-  const updateManagerRef = (rid, field, value) => setManagerRefs((p) => p.map((r) => (r.id === rid ? { ...r, [field]: value } : r)));
-  const addManagerRef = () => setManagerRefs((p) => [...p, newManagerRef()]);
-  const removeManagerRef = (rid) => setManagerRefs((p) => (p.length === 1 ? [newManagerRef()] : p.filter((r) => r.id !== rid)));
+  const [references, setReferences] = useState([newReference()]);
+  const updateReference = (rid, field, value) => setReferences((p) => p.map((r) => (r.id === rid ? { ...r, [field]: value } : r)));
+  const addReference = () => setReferences((p) => [...p, newReference()]);
+  const removeReference = (rid) => setReferences((p) => (p.length === 1 ? p : p.filter((r) => r.id !== rid)));
 
   const inputCls = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
   const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
@@ -238,21 +214,14 @@ export default function OutwardForm() {
       setVehicleNumber(x.vehicleNumber || "");
       setDispatchRemarks(x.remarks || "");
       const savedRefs = Array.isArray(x.referenceDocuments) ? x.referenceDocuments : [];
-      const toRow = (base, r) => ({
-        ...base,
-        refDocType: r.refDocType || base.refDocType,
-        refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
-        ewayBillNumber: r.ewayBillNumber || "", // not shown any more; kept as saved
-      });
-      const savedAccount = savedRefs.filter((r) => isAccountRef(r) && !isLegacyEwayRef(r));
-      const savedManager = savedRefs.filter((r) => !isAccountRef(r));
-      if (savedAccount.length) setAccountRefs(savedAccount.map((r) => toRow(newAccountRef(), r)));
-      if (savedManager.length) setManagerRefs(savedManager.map((r) => toRow(newManagerRef(), r)));
-      setLegacyRefs(savedRefs.filter(isLegacyEwayRef).map((r) => ({
-        refDocType: r.refDocType,
-        refDocNumber: String(r.refDocNumber || "").trim() || String(r.ewayBillNumber || "").trim(),
-        ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : undefined,
-      })));
+      if (savedRefs.length) {
+        setReferences(savedRefs.map((r) => ({
+          ...newReference(),
+          refDocType: r.refDocType || "Invoice",
+          refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
+          ewayBillNumber: r.ewayBillNumber || "",
+        })));
+      }
       if (x.workflowStatus === "REJECTED") {
         setRejection({ by: x.approvedByName, remarks: x.approvalRemarks });
       }
@@ -415,14 +384,11 @@ export default function OutwardForm() {
     };
 
     if (showDispatchSection) {
-      const toPayload = (r) => ({ refDocType: r.refDocType, refDocNumber: r.refDocNumber.trim(), ewayBillNumber: r.ewayBillNumber?.trim() || undefined });
-      const refs = [
-        ...accountRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
-        ...managerRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
-        ...legacyRefs,
-      ];
+      const refs = references
+        .filter((r) => r.refDocNumber.trim() || r.ewayBillNumber.trim())
+        .map((r) => ({ refDocType: r.refDocType, refDocNumber: r.refDocNumber.trim(), ewayBillNumber: r.ewayBillNumber.trim() || undefined }));
       if (entryStatus === "DISPATCHED") {
-        if (!refs.length) return toast.error("Please enter at least one reference document number.");
+        if (!refs.length) return toast.error("Please enter at least one reference document number or E-way bill number.");
         if (!dispatchMode) return toast.error("Please select the dispatch mode.");
       }
       payload.dispatch = {
@@ -672,54 +638,6 @@ export default function OutwardForm() {
 
           {showDispatchSection && (
             <>
-              {/* ACCOUNT part - invoice reference + invoice / other account documents, right after the items. */}
-              <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-sm font-semibold text-gray-900">Reference documents (Account)</h2>
-                    <p className="mt-0.5 text-xs text-gray-500">Invoice and other references added by the account team</p>
-                  </div>
-                  <button type="button" onClick={addAccountRef} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Plus size={13} />Add document</button>
-                </div>
-                <div className="space-y-4">
-                  {accountRefs.map((r, index) => (
-                    <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
-                      {accountRefs.length > 1 && (
-                        <div className="mb-3 flex items-center justify-between">
-                          <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
-                          <button type="button" onClick={() => removeAccountRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <div>
-                          <label className={labelCls}>Reference doc type</label>
-                          <div className="relative">
-                            <select value={r.refDocType} onChange={(e) => updateAccountRef(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
-                              {ACCOUNT_REF_TYPES.map((t) => <option key={t}>{t}</option>)}
-                            </select>
-                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                          </div>
-                        </div>
-                        <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateAccountRef(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <OutwardDocuments
-                outwardId={editId}
-                documents={(currentOutward?.documents || []).filter((d) => isAccountDocCategory(d.docCategory))}
-                canManage
-                requiredDocuments={ACCOUNT_REQUIRED_DOCUMENTS}
-                addMenuTypes={["Invoice", "Other"]}
-                otherPrefix={ACCOUNT_DOC_PREFIX}
-                showSummary={false}
-                title="Documents (Account)"
-                subtitle="Upload the invoice, or use Add document for another invoice or other file"
-              />
-
-              {/* WAREHOUSE MANAGER part - dispatch details, delivery challan / return note references, dispatch documents. */}
               <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
                 <h2 className="mb-4 text-sm font-semibold text-gray-900">Dispatch details</h2>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -737,40 +655,36 @@ export default function OutwardForm() {
 
                 <div className="mt-5 flex items-center justify-between">
                   <span className="text-xs font-semibold text-gray-700">Reference documents</span>
-                  <button type="button" onClick={addManagerRef} className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Plus size={13} />Add document</button>
+                  <button type="button" onClick={addReference} className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-white px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"><Plus size={13} />Add document</button>
                 </div>
                 <div className="mt-2 space-y-4">
-                  {managerRefs.map((r, index) => (
+                  {references.map((r, index) => (
                     <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
-                      {managerRefs.length > 1 && (
+                      {references.length > 1 && (
                         <div className="mb-3 flex items-center justify-between">
                           <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
-                          <button type="button" onClick={() => removeManagerRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
+                          <button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                         </div>
                       )}
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div>
                           <label className={labelCls}>Reference doc type</label>
                           <div className="relative">
-                            <select value={r.refDocType} onChange={(e) => updateManagerRef(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
-                              {MANAGER_REF_TYPES.map((t) => <option key={t}>{t}</option>)}
+                            <select value={r.refDocType} onChange={(e) => updateReference(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
+                              <option>Invoice</option><option>E-way Bill</option><option>Other (Accounts)</option><option>Delivery Challan</option><option>Return Note</option><option>Other</option>
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                           </div>
                         </div>
-                        <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateManagerRef(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
+                        <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
+                        <div><label className={labelCls}>E-way bill number</label><input value={r.ewayBillNumber} onChange={(e) => updateReference(r.id, "ewayBillNumber", e.target.value)} placeholder="If above threshold" className={inputCls} /></div>
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
 
-              <OutwardDocuments
-                outwardId={editId}
-                documents={(currentOutward?.documents || []).filter((d) => !isAccountDocCategory(d.docCategory))}
-                canManage
-                title="Dispatch documents"
-              />
+              <OutwardDocuments outwardId={editId} documents={currentOutward?.documents || []} canManage />
 
               <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
                 <label className={labelCls}>Dispatch remarks</label>
