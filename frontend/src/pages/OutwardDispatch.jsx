@@ -13,7 +13,7 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isPlaceholder, costStatusLabel, formatMoney } from "../features/outward/outwardHelpers";
+import { isPlaceholder, costStatusLabel, formatMoney, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 
 /**
@@ -33,7 +33,7 @@ const isSuperAdminUser = () => {
 };
 
 const makeId = () => crypto.randomUUID();
-const newReference = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
+const newReference = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "" });
 const toLocalInput = (value) => {
   const d = value ? new Date(value) : new Date();
   if (Number.isNaN(d.getTime())) return toLocalInput();
@@ -78,14 +78,15 @@ export default function OutwardDispatch() {
     if (!outward || filled) return;
     setFilled(true);
 
-    const saved = Array.isArray(outward.referenceDocuments) ? outward.referenceDocuments : [];
+    // Only the dispatch side's own references (delivery challan / return note / other).
+    // Invoice and e-way bill are added by the account team and shown read-only below.
+    const saved = (Array.isArray(outward.referenceDocuments) ? outward.referenceDocuments : []).filter(isManagerRef);
     if (saved.length) {
       setReferences(
         saved.map((r) => ({
           ...newReference(),
-          refDocType: r.refDocType || "Invoice",
+          refDocType: r.refDocType || "Delivery Challan",
           refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
-          ewayBillNumber: r.ewayBillNumber || "",
         }))
       );
     }
@@ -136,13 +137,12 @@ export default function OutwardDispatch() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const refs = references
-      .filter((r) => r.refDocNumber.trim() || r.ewayBillNumber.trim())
+      .filter((r) => r.refDocNumber.trim())
       .map((r) => ({
         refDocType: r.refDocType,
         refDocNumber: r.refDocNumber.trim(),
-        ewayBillNumber: r.ewayBillNumber.trim() || undefined,
       }));
-    if (!refs.length) return toast.error("Please enter at least one reference document number or E-way bill number.");
+    if (!refs.length) return toast.error("Please enter at least one reference document number.");
     if (!dispatchMode) return toast.error("Please select the dispatch mode.");
 
     setSaving(true);
@@ -198,6 +198,7 @@ export default function OutwardDispatch() {
   }
 
   const items = outward.items || [];
+  const accountRefs = (Array.isArray(outward.referenceDocuments) ? outward.referenceDocuments : []).filter(isAccountRef);
   // Super admin also sees the sales side (cost, cost status, UTR, proof, approval) and can update it.
   const showCost = superAdmin;
 
@@ -273,22 +274,47 @@ export default function OutwardDispatch() {
                       <button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                       <label className={labelCls}>Reference doc type</label>
                       <div className="relative">
                         <select value={r.refDocType} onChange={(e) => updateReference(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
-                          <option>Invoice</option><option>E-way Bill</option><option>Delivery Challan</option><option>Return Note</option><option>Other</option>
+                          {MANAGER_REF_TYPES.map((t) => <option key={t}>{t}</option>)}
                         </select>
                         <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                       </div>
                     </div>
                     <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
-                    <div><label className={labelCls}>E-way bill number</label><input value={r.ewayBillNumber} onChange={(e) => updateReference(r.id, "ewayBillNumber", e.target.value)} placeholder="If above threshold" className={inputCls} /></div>
                   </div>
                 </div>
               ))}
             </div>
+
+            {accountRefs.length > 0 && (
+              <div className="mt-5 border-t pt-4">
+                <span className="text-xs font-semibold text-gray-700">Added by the account team</span>
+                <div className="mt-2 overflow-x-auto rounded-lg border">
+                  <table className="w-full text-[11px] sm:text-sm">
+                    <thead>
+                      <tr className="border-b bg-gray-50 text-left text-gray-500">
+                        <th className="px-3 py-2">Document type</th>
+                        <th className="px-3 py-2">Reference no.</th>
+                        <th className="px-3 py-2">E-way bill no.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {accountRefs.map((r, i) => (
+                        <tr key={r.id || i} className="border-b last:border-0">
+                          <td className="px-3 py-2">{r.refDocType}</td>
+                          <td className="px-3 py-2">{r.refDocNumber || "-"}</td>
+                          <td className="px-3 py-2">{r.ewayBillNumber || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
@@ -346,7 +372,16 @@ export default function OutwardDispatch() {
             </div>
           </section>
 
-          <OutwardDocuments outwardId={id} documents={outward.documents || []} canManage deferred={!alreadyDispatched} stagedFiles={stagedDocs} onStagedChange={setStagedDocs} />
+          <OutwardDocuments
+            outwardId={id}
+            documents={outward.documents || []}
+            canManage
+            deferred={!alreadyDispatched}
+            stagedFiles={stagedDocs}
+            onStagedChange={setStagedDocs}
+            // Invoice / e-way bill documents come from the account team: the manager can download them, not change them.
+            isLocked={(category) => !superAdmin && isAccountDocCategory(category)}
+          />
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
             <label className={labelCls}>Dispatch remarks</label>

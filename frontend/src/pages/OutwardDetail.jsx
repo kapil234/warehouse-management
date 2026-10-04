@@ -33,9 +33,12 @@ import {
   costStatusLabel,
   formatMoney,
   isPlaceholder,
+  ACCOUNT_EDIT_STATUSES,
+  isAccountDocCategory,
 } from "../features/outward/outwardHelpers";
 import { downloadOutwardPdf } from "../features/outward/outwardPdf";
 import OutwardDocuments from "../components/OutwardDocuments";
+import AccountOutwardPanel from "../components/AccountOutwardPanel";
 
 export default function OutwardDetail() {
   const navigate = useNavigate();
@@ -163,6 +166,8 @@ export default function OutwardDetail() {
   const canEdit = isSuperAdmin || (isSales && ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(workflow));
   const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED"].includes(workflow);
   const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
+  // Account, and the Super admin while the entry waits for approval, get the invoice panel with Approve / Reject at the bottom.
+  const showAccountPanel = isAccount || (isSuperAdmin && ["PENDING_APPROVAL", "REJECTED"].includes(workflow));
   const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));
   // Documents: add / upload / replace / delete for the warehouse manager (before and after dispatch)
   // and for the Super admin. Sales / Account never see the section for editing.
@@ -237,10 +242,10 @@ export default function OutwardDetail() {
             </div>
 
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              {canApprove && (
+              {canApprove && !showAccountPanel && (
                 <button type="button" onClick={() => openDecision("approve")} className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 sm:text-sm"><Check size={15} /> Approve</button>
               )}
-              {canReject && (
+              {canReject && !showAccountPanel && (
                 <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
               )}
               {canDispatch && (
@@ -424,7 +429,27 @@ export default function OutwardDetail() {
           </div>
         </div>
 
-        {showDocuments && <OutwardDocuments outwardId={id} documents={documents} canManage={canManageDocs} />}
+        {/* Account: its own reference documents + documents (invoice / e-way bill / other), editable until dispatch. */}
+        {showAccountPanel && (
+          <AccountOutwardPanel
+            outwardId={id}
+            outward={outward}
+            editable={ACCOUNT_EDIT_STATUSES.includes(workflow)}
+            canApprove={canApprove}
+            canReject={canReject}
+            onDecision={openDecision}
+          />
+        )}
+
+        {showDocuments && (
+          <OutwardDocuments
+            outwardId={id}
+            documents={documents}
+            canManage={canManageDocs}
+            // Invoice / e-way bill belong to the account team: the manager only downloads them.
+            isLocked={(category) => isWarehouse && isAccountDocCategory(category)}
+          />
+        )}
       </div>
 
 

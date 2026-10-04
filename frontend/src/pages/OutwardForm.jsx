@@ -8,6 +8,7 @@ import {
   updateOutward,
   fetchOutwardById,
   uploadOutwardProof,
+  deleteUploadedProof,
   resetOutwardCreateStatus,
   selectOutwardCreateStatus,
   selectCurrentOutward,
@@ -88,6 +89,8 @@ export default function OutwardForm() {
   const [pickedWarehouseId, setPickedWarehouseId] = useState("");
   const [entryWarehouse, setEntryWarehouse] = useState(null); // edit mode: the entry's own warehouse
   const [items, setItems] = useState([newItem()]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   // Edit mode: what this entry already held when it was opened (see availableFor).
   const [originalItems, setOriginalItems] = useState([]);
   const [rejection, setRejection] = useState(null); // { by, remarks } when Account sent it back
@@ -159,8 +162,9 @@ export default function OutwardForm() {
   // when the warehouse changes and let the user attach it again.
   useEffect(() => {
     if (isEdit) return;
+    itemsRef.current.forEach((i) => { if (i.proof?.fileKey) dispatch(deleteUploadedProof({ fileKey: i.proof.fileKey })); });
     setItems((prev) => (prev.some((i) => i.proof) ? prev.map((i) => (i.proof ? { ...i, proof: null } : i)) : prev));
-  }, [warehouseId, isEdit]);
+  }, [warehouseId, isEdit, dispatch]);
   const companyName =
     selectedWarehouse?.company?.name || companyOptions.find((c) => c.id === selectedCompanyId)?.name || "";
 
@@ -277,7 +281,13 @@ export default function OutwardForm() {
   }));
   const patchItem = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   const addItem = () => setItems((p) => [...p, newItem()]);
-  const removeItem = (id) => setItems((p) => (p.length === 1 ? p : p.filter((i) => i.id !== id)));
+  const removeItem = (id) => {
+    if (itemsRef.current.length === 1) return;
+    // Removing an item row also deletes a proof that was uploaded for it but never saved.
+    const fileKey = itemsRef.current.find((i) => i.id === id)?.proof?.fileKey;
+    if (fileKey) dispatch(deleteUploadedProof({ fileKey }));
+    setItems((p) => p.filter((i) => i.id !== id));
+  };
 
   const handleProofPick = async (itemId, file) => {
     if (!file) return;
@@ -286,17 +296,26 @@ export default function OutwardForm() {
 
     if (!warehouseId) return toast.error("Please select a warehouse before attaching a payment proof.");
 
+    const previousKey = itemsRef.current.find((i) => i.id === itemId)?.proof?.fileKey;
     setProofUploadingId(itemId);
     const result = await dispatch(uploadOutwardProof({ file, warehouseId, outwardId }));
     setProofUploadingId(null);
     if (uploadOutwardProof.fulfilled.match(result)) {
       patchItem(itemId, { proof: result.payload, keepProof: false });
+      // The file it replaces was never saved, so it is deleted from storage right away.
+      if (previousKey) dispatch(deleteUploadedProof({ fileKey: previousKey }));
     } else {
       toast.error(result.payload || "Failed to upload the file.");
     }
   };
 
-  const removeProof = (itemId) => patchItem(itemId, { proof: null, keepProof: false, savedProofName: "" });
+  const removeProof = (itemId) => {
+    // A file uploaded in this session (not saved yet) is deleted from storage now; a saved proof is
+    // deleted by the server when the entry is saved without it.
+    const fileKey = itemsRef.current.find((i) => i.id === itemId)?.proof?.fileKey;
+    if (fileKey) dispatch(deleteUploadedProof({ fileKey }));
+    patchItem(itemId, { proof: null, keepProof: false, savedProofName: "" });
+  };
 
   const total = items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
 
@@ -652,7 +671,7 @@ export default function OutwardForm() {
                           <label className={labelCls}>Reference doc type</label>
                           <div className="relative">
                             <select value={r.refDocType} onChange={(e) => updateReference(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
-                              <option>Invoice</option><option>E-way Bill</option><option>Delivery Challan</option><option>Return Note</option><option>Other</option>
+                              <option>Invoice</option><option>E-way Bill</option><option>Other (Accounts)</option><option>Delivery Challan</option><option>Return Note</option><option>Other</option>
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                           </div>

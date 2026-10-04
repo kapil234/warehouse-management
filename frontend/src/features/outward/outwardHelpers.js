@@ -9,11 +9,31 @@ import {
 // REQUIRED_DOCUMENTS
 // -------------------------------------------------
 
+// Warehouse manager's documents. Invoice / E-way bill now belong to the account team.
 export const REQUIRED_DOCUMENTS = [
   "Delivery challan",
-  "E-way bill",
   "Dispatch photo",
 ];
+
+// -------------------------------------------------
+// Account team's side: reference documents + documents
+// -------------------------------------------------
+export const ACCOUNT_REF_TYPES = ["Invoice", "Other (Accounts)"];
+// Older entries may still hold an "E-way Bill" reference: it stays account-owned but is no longer offered.
+const ACCOUNT_REF_OWNED = [...ACCOUNT_REF_TYPES, "E-way Bill"];
+export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
+export const ACCOUNT_REQUIRED_DOCUMENTS = ["Invoice"];
+export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
+
+const sameText = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+export const isAccountRef = (ref) => ACCOUNT_REF_OWNED.some((t) => sameText(t, ref?.refDocType));
+export const isManagerRef = (ref) => !isAccountRef(ref);
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|accounts other)/i.test(String(category || "").trim());
+// "Accounts other - GST certificate" -> "Other - GST certificate"
+export const docLabel = (category) => String(category || "Document").replace(/^accounts other/i, "Other");
+
+// Account may add / replace / delete its documents until the entry is dispatched.
+export const ACCOUNT_EDIT_STATUSES = ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"];
 
 const totalCostOf = (items) => items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
 

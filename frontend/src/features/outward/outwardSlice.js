@@ -207,6 +207,19 @@ export const uploadOutwardProof = createAsyncThunk(
   }
 );
 
+// Deletes a payment proof that was uploaded but replaced / removed before the entry was saved.
+export const deleteUploadedProof = createAsyncThunk(
+  "outward/deleteUploadedProof",
+  async ({ fileKey }, { rejectWithValue }) => {
+    try {
+      await apiClient.delete("/api/upload", { data: { fileKey } });
+      return { fileKey };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to delete the file");
+    }
+  }
+);
+
 export const approveOutward = createAsyncThunk(
   "outward/approve",
   async ({ id, remarks }, { rejectWithValue }) => {
@@ -252,6 +265,30 @@ export const dispatchOutward = createAsyncThunk(
       return data;
     } catch (err) {
       return rejectWithValue(err.response?.data?.message || "Failed to save dispatch details");
+    }
+  }
+);
+
+// Account: saves its own reference documents (invoice / e-way bill / other) together with any picked files.
+export const saveAccountDocuments = createAsyncThunk(
+  "outward/saveAccountDocuments",
+  async ({ id, payload, files = [] }, { rejectWithValue }) => {
+    try {
+      if (!files.length) {
+        const { data } = await apiClient.put(`/api/outward/${id}/account-documents`, payload);
+        return data;
+      }
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify(payload));
+      formData.append("categories", JSON.stringify(files.map((f) => f.docCategory)));
+      files.forEach((f) => formData.append("files", f.file));
+      const { data } = await apiClient.put(`/api/outward/${id}/account-documents`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000,
+      });
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to save documents");
     }
   }
 );
@@ -463,6 +500,12 @@ const outwardSlice = createSlice({
         if (state.current && state.current.id === action.meta.arg.id) {
           state.current.workflowStatus = "PENDING_DISPATCH";
         }
+      })
+
+      // Account saved its reference documents / files: the response is the refreshed entry.
+      .addCase(saveAccountDocuments.fulfilled, (state, action) => {
+        const entry = action.payload?.data;
+        if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
       })
 
       // ---------------- update ----------------

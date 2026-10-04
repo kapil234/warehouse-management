@@ -9,7 +9,7 @@ import {
   selectOutwardDocActionStatus,
   selectOutwardUploadingDocs,
 } from "../features/outward/outwardSlice";
-import { REQUIRED_DOCUMENTS } from "../features/outward/outwardHelpers";
+import { REQUIRED_DOCUMENTS, docLabel } from "../features/outward/outwardHelpers";
 
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -25,7 +25,24 @@ const sameCategory = (a, b) => String(a || "").trim().toLowerCase() === String(b
  *   deferred = true   -> before dispatch: picked files are only kept in the page
  *                        (stagedFiles / onStagedChange) and are sent together with the dispatch details.
  */
-export default function OutwardDocuments({ outwardId, documents = [], canManage = false, deferred = false, stagedFiles = [], onStagedChange }) {
+export default function OutwardDocuments({
+  outwardId,
+  documents = [],
+  canManage = false,
+  deferred = false,
+  stagedFiles = [],
+  onStagedChange,
+  // Which rows always show (uploaded or not), and what the "Add document" menu offers.
+  requiredDocuments = REQUIRED_DOCUMENTS,
+  addMenuTypes = [...REQUIRED_DOCUMENTS, "Other"],
+  // "Other" documents get this prefix in their stored name (Account uses it to tell its documents apart).
+  otherPrefix = "",
+  // Rows for which this user may not replace / delete (e.g. the manager looking at Account's invoice).
+  isLocked = () => false,
+  title = "Documents",
+  subtitle,
+  showSummary = true,
+}) {
   const dispatch = useDispatch();
   const docActionStatus = useSelector(selectOutwardDocActionStatus);
   const uploadingDocs = useSelector(selectOutwardUploadingDocs);
@@ -116,7 +133,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
     if (type === "Other") {
       const name = window.prompt("Enter document name");
       if (!name?.trim()) return;
-      label = name.trim();
+      label = `${otherPrefix}${name.trim()}`;
     }
 
     const existingCount = [...documents, ...stagedFiles].filter((doc) =>
@@ -156,14 +173,14 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
   };
 
   // Required types always show first (uploaded or not), then extra copies / custom ones.
-  const requiredLower = REQUIRED_DOCUMENTS.map((label) => label.toLowerCase());
+  const requiredLower = requiredDocuments.map((label) => label.toLowerCase());
   const extraDocuments = documents.filter(
     (doc) => !requiredLower.includes(String(doc.docCategory || "").trim().toLowerCase())
   );
   const stagedFor = (label) => stagedFiles.find((f) => sameCategory(f.docCategory, label));
   const extraStaged = stagedFiles.filter((f) => !requiredLower.includes(String(f.docCategory || "").trim().toLowerCase()));
   const documentRows = [
-    ...REQUIRED_DOCUMENTS.map((label) => ({
+    ...requiredDocuments.map((label) => ({
       key: label,
       label,
       document: documents.find((doc) => sameCategory(doc.docCategory, label)),
@@ -183,7 +200,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
   ];
 
   const uploadedCategories = [...documents, ...stagedFiles].map((doc) => String(doc.docCategory || "").trim().toLowerCase());
-  const allUploaded = REQUIRED_DOCUMENTS.every((label) => {
+  const allUploaded = requiredDocuments.every((label) => {
     const required = label.toLowerCase();
     return uploadedCategories.some((v) => v === required || v.startsWith(`${required} #`) || v.startsWith(`${required} `));
   });
@@ -194,9 +211,9 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
     <div className="bg-white rounded-xl border p-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Documents</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           <p className="text-sm text-gray-500 mt-1">
-            {canManage ? "Upload, download, replace or delete required documents" : "Dispatch documents"}
+            {subtitle || (canManage ? "Upload, download, replace or delete required documents" : "Dispatch documents")}
           </p>
         </div>
 
@@ -212,7 +229,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
 
             {showDocumentMenu && (
               <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white p-1 shadow-lg">
-                {[...REQUIRED_DOCUMENTS, "Other"].map((type) => (
+                {addMenuTypes.map((type) => (
                   <button
                     key={type}
                     type="button"
@@ -263,7 +280,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
                   </div>
 
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 sm:text-base">{label}</p>
+                    <p className="text-sm font-medium text-gray-900 sm:text-base">{docLabel(label)}</p>
                     {document && staged && (
                       <p className="text-[11px] text-amber-600 truncate mt-1 sm:text-xs">
                         New file: {staged.file.name} {" • "} replaces this one
@@ -298,7 +315,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
                         <span className="hidden sm:inline">Download</span>
                       </button>
 
-                      {canManage && (
+                      {canManage && !isLocked(document.docCategory) && (
                         <>
                           <label
                             className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-gray-50 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm ${
@@ -371,7 +388,7 @@ export default function OutwardDocuments({ outwardId, documents = [], canManage 
         })}
       </div>
 
-      {canManage && (
+      {canManage && showSummary && (
         <div className="mt-5 pt-4 border-t">
           {allUploaded ? (
             <div className="flex items-center gap-2 text-green-600 font-medium">
