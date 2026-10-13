@@ -17,7 +17,7 @@ import { isFinanceSide, getFinanceWarehouseIds } from "../utils/outwardWorkflow.
  */
  
 const GRN_REQUIRED_DOCS = ["Vendor invoice", "E-way bill", "Unloading sign-off sheet"];
-const OUTWARD_REQUIRED_DOCS = ["Delivery challan", "E-way bill", "Dispatch photo"];
+const OUTWARD_REQUIRED_DOCS = ["Delivery challan", "Dispatch photo"];
  
 // ---------------------------------------------------
 // Same warehouse scoping rule used by listGrn / listOutward:

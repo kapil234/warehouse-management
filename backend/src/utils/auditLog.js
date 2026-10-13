@@ -93,6 +93,9 @@ const FIELD_LABELS = {
   dispatchMode: "Dispatch mode",
   vehicleNumber: "Vehicle number",
   remarks: "Remarks",
+  piNumber: "PI number",
+  piDate: "PI date",
+  piAmount: "PI amount",
 };
 
 /**

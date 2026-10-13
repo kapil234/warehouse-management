@@ -447,7 +447,7 @@ export default function Outward() {
             <h1 className="text-lg font-bold text-gray-900 sm:text-2xl">Outward entries</h1>
             <p className="mt-0.5 text-[11px] text-gray-500 sm:mt-1 sm:text-sm">
               {role === "ACCOUNT"
-                ? "Review the cost details and approve outgoing stock"
+                ? "Review the payment details and approve outgoing stock"
                 : isWarehouseRole
                 ? "Approved entries waiting for dispatch"
                 : "View and manage all outgoing stock"}
@@ -584,7 +584,7 @@ export default function Outward() {
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Outward type</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Customer</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Quantity</th>
-                    {showCost && <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Total cost</th>}
+                    {showCost && <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">PI amount</th>}
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Date & time</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Status</th>
                     <th className="px-5 py-3"></th>
@@ -609,7 +609,7 @@ export default function Outward() {
                       </td>
                       {showCost && (
                         <td className="px-5 py-4">
-                          <span className="text-sm font-medium text-gray-800">{formatMoney(item.totalCost)}</span>
+                          <span className="text-sm font-medium text-gray-800">{formatMoney(item.piAmount)}</span>
                         </td>
                       )}
                       <td className="px-5 py-4">
@@ -738,7 +738,7 @@ export default function Outward() {
                           {showCost && (
                             <>
                               <span>·</span>
-                              <span>{formatMoney(item.totalCost)}</span>
+                              <span>{formatMoney(item.piAmount)}</span>
                             </>
                           )}
                           {item.serials > 0 && (

@@ -18,7 +18,6 @@ import { getWarehousePermissions } from "../features/warehouse/warehousePermissi
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
 import {
   COST_STATUS_OPTIONS,
-  formatMoney,
   isPlaceholder,
   ACCOUNT_REF_TYPES,
   MANAGER_REF_TYPES,
@@ -41,16 +40,16 @@ import OutwardDocuments from "../components/OutwardDocuments";
  * Sales (customer + items) -> Account (invoice reference + documents) ->
  * Warehouse manager (dispatch details, reference documents, documents, remarks).
  *
- * Sales fills the customer details and the item details, including the
- * cost of every item:
+ * Sales fills the customer details (customer name, then the PI row: PI No., PI date,
+ * PI amount, PI upload) and the item details, including the payment status of every item:
  *
- *   Cost status  Completed / Partially completed  -> UTR number OR a payment
- *                                                    proof (image / file) is required
- *                Pending                          -> no payment details needed
+ *   Payment status  Completed / Partially completed  -> UTR number OR a payment
+ *                                                       proof (image / file) is required
+ *                   Pending                          -> no payment details needed
  *
  * On submit the entry goes to the Account team. After Account approves
  * it, it goes to the warehouse manager, who fills the vehicle / dispatch
- * details. (The warehouse manager never sees cost, UTR or approval.)
+ * details. (The warehouse manager never sees PI details, payment status, UTR or approval.)
  * =========================================================
  */
 
@@ -70,8 +69,7 @@ const newItem = () => ({
   sku: "",
   quantity: "",
   uom: "Pcs",
-  cost: "",
-  costStatus: "PENDING",
+  paymentStatus: "PENDING",
   utrNumber: "",
   proof: null, // a file uploaded now: { fileKey, fileName, fileType }
   keepProof: false, // editing: the proof saved earlier is still attached
@@ -104,6 +102,16 @@ export default function OutwardForm() {
   const [outwardDateTime, setOutwardDateTime] = useState(() => getDateTimeLocal());
   const [outwardType, setOutwardType] = useState("Sale - Stock Out");
   const [customerName, setCustomerName] = useState("");
+  // PI (proforma invoice) row, right after the customer name.
+  const [piNumber, setPiNumber] = useState("");
+  const [piDate, setPiDate] = useState("");
+  const [piAmount, setPiAmount] = useState("");
+  const [piFile, setPiFile] = useState(null); // a file uploaded now: { fileKey, fileName, fileType }
+  const [keepPiFile, setKeepPiFile] = useState(false); // editing: the PI file saved earlier is still attached
+  const [savedPiFileName, setSavedPiFileName] = useState("");
+  const [piUploading, setPiUploading] = useState(false);
+  const piFileRef = useRef(piFile);
+  piFileRef.current = piFile;
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [pickedWarehouseId, setPickedWarehouseId] = useState("");
   const [entryWarehouse, setEntryWarehouse] = useState(null); // edit mode: the entry's own warehouse
@@ -123,7 +131,7 @@ export default function OutwardForm() {
   const [entryStatus, setEntryStatus] = useState(null);
   const alreadyApproved = isEdit && entryStatus === "PENDING_DISPATCH";
 
-  // Before dispatch the form only holds the sales information (customer, items, cost); after
+  // Before dispatch the form only holds the sales information (customer, PI details, items, payment status); after
   // approving again the dispatch details are filled on the dispatch page. Once an entry is
   // dispatched, the super admin gets the whole form: sales + dispatch details + documents.
   const currentOutward = useSelector(selectCurrentOutward);
@@ -188,6 +196,8 @@ export default function OutwardForm() {
     if (isEdit) return;
     itemsRef.current.forEach((i) => { if (i.proof?.fileKey) dispatch(deleteUploadedProof({ fileKey: i.proof.fileKey })); });
     setItems((prev) => (prev.some((i) => i.proof) ? prev.map((i) => (i.proof ? { ...i, proof: null } : i)) : prev));
+    if (piFileRef.current?.fileKey) dispatch(deleteUploadedProof({ fileKey: piFileRef.current.fileKey }));
+    setPiFile(null);
   }, [warehouseId, isEdit, dispatch]);
   const companyName =
     selectedWarehouse?.company?.name || companyOptions.find((c) => c.id === selectedCompanyId)?.name || "";
@@ -215,6 +225,11 @@ export default function OutwardForm() {
       setOutwardDateTime(getDateTimeLocal(x.refDocDate || x.createdAt));
       setOutwardType(x.outwardType || "Sale - Stock Out");
       setCustomerName(x.customerName || "");
+      setPiNumber(x.piNumber || "");
+      setPiDate(x.piDate ? String(x.piDate).slice(0, 10) : "");
+      setPiAmount(x.piAmount === null || x.piAmount === undefined ? "" : String(x.piAmount));
+      setKeepPiFile(Boolean(x.hasPiFile));
+      setSavedPiFileName(x.piFileName || "");
       setItems(
         (x.items || []).map((i) => ({
           ...newItem(),
@@ -224,8 +239,7 @@ export default function OutwardForm() {
           sku: i.sku || "",
           quantity: String(i.quantity ?? ""),
           uom: i.uom || "Pcs",
-          cost: i.cost === null || i.cost === undefined ? "" : String(i.cost),
-          costStatus: i.costStatus || "PENDING",
+          paymentStatus: i.paymentStatus || "PENDING",
           utrNumber: i.utrNumber || "",
           keepProof: Boolean(i.hasProof),
           savedProofName: i.proofFileName || "",
@@ -348,7 +362,35 @@ export default function OutwardForm() {
     patchItem(itemId, { proof: null, keepProof: false, savedProofName: "" });
   };
 
-  const total = items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
+  const handlePiPick = async (file) => {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) return toast.error("File size must be less than 10 MB.");
+    if (!PROOF_TYPES.includes(file.type)) return toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
+    if (!warehouseId) return toast.error("Please select a warehouse before attaching the PI file.");
+
+    const previousKey = piFileRef.current?.fileKey;
+    setPiUploading(true);
+    const result = await dispatch(uploadOutwardProof({ file, warehouseId, outwardId }));
+    setPiUploading(false);
+    if (uploadOutwardProof.fulfilled.match(result)) {
+      setPiFile(result.payload);
+      setKeepPiFile(false);
+      // The file it replaces was never saved, so it is deleted from storage right away.
+      if (previousKey) dispatch(deleteUploadedProof({ fileKey: previousKey }));
+    } else {
+      toast.error(result.payload || "Failed to upload the file.");
+    }
+  };
+
+  const removePiFile = () => {
+    if (piFileRef.current?.fileKey) dispatch(deleteUploadedProof({ fileKey: piFileRef.current.fileKey }));
+    setPiFile(null);
+    setKeepPiFile(false);
+    setSavedPiFileName("");
+  };
+
+  const hasPiFile = Boolean(piFile) || keepPiFile;
+  const piFileName = piFile?.fileName || savedPiFileName || "PI file";
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -357,6 +399,7 @@ export default function OutwardForm() {
     if (operationBlocked || !permissions.canOutward) return toast.error("Outward is not available for this warehouse.");
     if (!customerName.trim()) return toast.error("Please enter customer / recipient name.");
     if (!companyName.trim()) return toast.error("Company name is missing.");
+    if (piAmount !== "" && (!Number.isFinite(Number(piAmount)) || Number(piAmount) < 0)) return toast.error("Please enter a valid PI amount.");
 
     for (const [index, item] of items.entries()) {
       const label = `Item ${index + 1}`;
@@ -364,11 +407,8 @@ export default function OutwardForm() {
       if (!item.sku.trim()) return toast.error(`${label}: please select SKU / model.`);
       if (Number(item.quantity) <= 0) return toast.error(`${label}: please enter a valid quantity.`);
       if (!item.uom) return toast.error(`${label}: please select UOM.`);
-      if (item.cost === "" || !Number.isFinite(Number(item.cost)) || Number(item.cost) < 0) {
-        return toast.error(`${label}: please enter the cost.`);
-      }
-      if (!item.costStatus) return toast.error(`${label}: please select the cost status.`);
-      if (item.costStatus !== "PENDING" && !item.utrNumber.trim() && !item.proof && !item.keepProof) {
+      if (!item.paymentStatus) return toast.error(`${label}: please select the payment status.`);
+      if (item.paymentStatus !== "PENDING" && !item.utrNumber.trim() && !item.proof && !item.keepProof) {
         return toast.error(`${label}: enter the UTR number or attach a payment proof (image / file).`);
       }
     }
@@ -394,8 +434,15 @@ export default function OutwardForm() {
       outwardDateTime,
       customerName: customerName.trim(),
       companyName: companyName.trim(),
+      piNumber: piNumber.trim() || undefined,
+      piDate: piDate || undefined,
+      piAmount: piAmount === "" ? undefined : Number(piAmount),
+      piFileKey: piFile?.fileKey,
+      piFileName: piFile?.fileName,
+      piFileType: piFile?.fileType,
+      keepPiFile: !piFile && keepPiFile,
       items: items.map((i) => {
-        const paid = i.costStatus !== "PENDING";
+        const paid = i.paymentStatus !== "PENDING";
         return {
           serverId: i.serverId,
           category: i.category,
@@ -403,8 +450,7 @@ export default function OutwardForm() {
           sku: i.sku.trim(),
           quantity: Number(i.quantity),
           uom: i.uom,
-          cost: Number(i.cost),
-          costStatus: i.costStatus,
+          paymentStatus: i.paymentStatus,
           utrNumber: paid ? i.utrNumber.trim() || undefined : undefined,
           proofFileKey: paid ? i.proof?.fileKey : undefined,
           proofFileName: paid ? i.proof?.fileName : undefined,
@@ -549,6 +595,37 @@ export default function OutwardForm() {
             <div className="mt-4">
               <PartyNameField value={customerName} onChange={setCustomerName} storageKey="outward-customer-names" label="Customer / Recipient name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer / recipient name" addLabel="+ Add new customer / recipient" />
             </div>
+
+            {/* PI row: PI No., PI date, PI amount, PI upload */}
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
+              <div>
+                <label className={labelCls}>PI No.</label>
+                <input value={piNumber} onChange={(e) => setPiNumber(e.target.value)} placeholder="Enter PI number" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>PI date</label>
+                <input type="date" value={piDate} onChange={(e) => setPiDate(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>PI amount (₹)</label>
+                <input type="number" min="0" step="0.01" value={piAmount} onChange={(e) => setPiAmount(e.target.value)} placeholder="0.00" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>PI upload</label>
+                {hasPiFile ? (
+                  <div className="flex items-center justify-between gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-700">
+                    <span className="flex min-w-0 items-center gap-2"><Paperclip size={15} className="shrink-0" /><span className="truncate">{piFileName}</span></span>
+                    <button type="button" onClick={removePiFile} title="Remove" className="shrink-0 text-green-700 hover:text-red-600"><X size={16} /></button>
+                  </div>
+                ) : (
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-300 bg-white px-3 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 ${piUploading ? "pointer-events-none opacity-60" : ""}`}>
+                    {piUploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />}
+                    {piUploading ? "Uploading..." : "Attach file"}
+                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={piUploading} onChange={(e) => { handlePiPick(e.target.files?.[0]); e.target.value = ""; }} />
+                  </label>
+                )}
+              </div>
+            </div>
           </section>
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
@@ -570,7 +647,7 @@ export default function OutwardForm() {
               {items.map((item, index) => {
                 const stockInfo = item.sku ? availableFor(item.id, item.category, item.sku) : null;
                 const overLimit = stockInfo && Number(item.quantity) > stockInfo.available;
-                const paid = item.costStatus !== "PENDING";
+                const paid = item.paymentStatus !== "PENDING";
                 const hasProof = Boolean(item.proof) || item.keepProof;
                 const proofName = item.proof?.fileName || item.savedProofName || "Payment proof";
                 const uploading = proofUploadingId === item.id;
@@ -614,17 +691,13 @@ export default function OutwardForm() {
                       </div>
                     </div>
 
-                    {/* Cost side - this part is never shown to the warehouse manager. */}
+                    {/* Payment side - this part is never shown to the warehouse manager. */}
                     <div className="mt-4 border-t border-gray-100 pt-4">
                       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div>
-                          <label className={labelCls}>Cost (₹)</label>
-                          <input type="number" min="0" step="0.01" value={item.cost} onChange={(e) => updateItem(item.id, "cost", e.target.value)} placeholder="0.00" className={inputCls} />
-                        </div>
-                        <div>
-                          <label className={labelCls}>Cost status</label>
+                          <label className={labelCls}>Payment status</label>
                           <div className="relative">
-                            <select value={item.costStatus} onChange={(e) => updateItem(item.id, "costStatus", e.target.value)} className={`${inputCls} appearance-none`}>
+                            <select value={item.paymentStatus} onChange={(e) => updateItem(item.id, "paymentStatus", e.target.value)} className={`${inputCls} appearance-none`}>
                               {COST_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -654,7 +727,7 @@ export default function OutwardForm() {
                             )}
                           </div>
                           <p className="text-[11px] text-gray-500 sm:col-span-2">
-                            {item.costStatus === "COMPLETED" ? "Completed" : "Partially completed"} needs the UTR number or a payment proof (either one is enough).
+                            {item.paymentStatus === "COMPLETED" ? "Completed" : "Partially completed"} needs the UTR number or a payment proof (either one is enough).
                           </p>
                         </div>
                       )}
@@ -662,11 +735,6 @@ export default function OutwardForm() {
                   </div>
                 );
               })}
-            </div>
-
-            <div className="mt-4 flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
-              <span className="font-medium text-gray-600">Total cost</span>
-              <span className="font-semibold text-gray-900">{formatMoney(total)}</span>
             </div>
           </section>
 
@@ -779,7 +847,7 @@ export default function OutwardForm() {
             </>
           )}
 
-          <button type="submit" disabled={saving || proofUploadingId !== null} className="w-full rounded-lg bg-gray-900 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-40">
+          <button type="submit" disabled={saving || proofUploadingId !== null || piUploading} className="w-full rounded-lg bg-gray-900 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-40">
             {saving ? "Saving..." : isEdit ? "Save and send for approval" : "Submit for approval"}
           </button>
         </form>

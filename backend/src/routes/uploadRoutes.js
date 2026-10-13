@@ -1,5 +1,5 @@
 import express from "express";
-import { uploadFile } from "../controllers/uploadController.js";
+import { uploadFile, deleteUploadedFile } from "../controllers/uploadController.js";
 import { upload } from "../middleware/uploadMiddleware.js";
 import authenticate from "../middleware/authenticate.js";
 import authorize from "../middleware/authorize.js";
@@ -18,5 +18,8 @@ router.post(
   upload.single("file"),
   uploadFile
 );
+
+// Remove a proof that was uploaded but replaced / removed before saving
+router.delete("/", deleteUploadedFile);
 
 export default router;

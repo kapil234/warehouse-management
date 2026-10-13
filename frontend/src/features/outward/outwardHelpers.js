@@ -135,6 +135,8 @@ export function formatOutwardEntry(outward, index) {
     workflowStatus: outward.workflowStatus || null,
     dispatchState: outward.dispatchState || null,
     totalCost: totalCostOf(items),
+    piNumber: outward.piNumber || "",
+    piAmount: outward.piAmount ?? null,
     refDocType: outward.refDocType || outward.ref_doc_type || "",
     refDocNumber: outward.refDocNumber || outward.ref_doc_number || "",
     refDocDate: outward.refDocDate || outward.ref_doc_date || "",
@@ -158,7 +160,7 @@ export const COST_STATUS_OPTIONS = [
   { value: "PENDING", label: "Pending" },
 ];
 
-export const costStatusLabel = (value) =>
+export const paymentStatusLabel = (value) =>
   COST_STATUS_OPTIONS.find((o) => o.value === value)?.label || "-";
 
 export const WORKFLOW_STATUS = {

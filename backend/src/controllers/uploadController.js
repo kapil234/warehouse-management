@@ -79,11 +79,12 @@ export async function uploadFile(
     // Only this path is saved - there is no temporary copy.
     // ==========================================
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const { warehouseId, outwardId } = req.body || {};
+    const { warehouseId, outwardId, kind } = req.body || {};
+    const isPi = kind === "pi";
 
     if (!UUID_RE.test(String(warehouseId || "")) || !UUID_RE.test(String(outwardId || ""))) {
       return res.status(422).json({
-        message: "Select a warehouse before attaching a payment proof.",
+        message: "Select a warehouse before attaching a file.",
       });
     }
 
@@ -109,7 +110,7 @@ export async function uploadFile(
     }
 
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const fileName = `payment-${uniqueSuffix}.${extension}`;
+    const fileName = `${isPi ? "pi" : "payment"}-${uniqueSuffix}.${extension}`;
     // Existing entry (edit): straight into its own folder. New entry: waits in uploads/<id>/ and is
     // moved to min/<outward number>/ when the entry is created.
     const folder = existingEntry ? outwardFolder(existingEntry.outwardNumber) : tempProofFolder(outwardId);
@@ -193,5 +194,33 @@ export async function uploadFile(
       error:
         error.message,
     });
+  }
+}
+
+/**
+ * DELETE /api/upload   body: { fileKey }
+ * Removes a payment-proof file that was uploaded but never saved with an entry (the user replaced or
+ * removed it before pressing Save). A file that an entry or document still uses is never deleted here.
+ */
+export async function deleteUploadedFile(req, res) {
+  try {
+    const fileKey = String(req.body?.fileKey || "");
+    const name = fileKey.split("/").pop() || "";
+    if (!/^(uploads|min)\//.test(fileKey) || fileKey.includes("..") || !/^(payment|pi)-/.test(name)) {
+      return res.status(422).json({ message: "Invalid file." });
+    }
+    const [inItem, inPi, inDocument] = await Promise.all([
+      prisma.minItem.findFirst({ where: { proofFileKey: fileKey }, select: { id: true } }),
+      prisma.min.findFirst({ where: { piFileKey: fileKey }, select: { id: true } }),
+      prisma.document.findFirst({ where: { fileKey }, select: { id: true } }),
+    ]);
+    if (inItem || inPi || inDocument) return res.json({ message: "File is in use and was kept." });
+
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET).remove([fileKey]);
+    if (error) return res.status(500).json({ message: "Failed to delete the file.", error: error.message });
+    return res.json({ message: "File deleted." });
+  } catch (error) {
+    console.error("DELETE UPLOADED FILE ERROR:", error);
+    return res.status(500).json({ message: "Failed to delete the file." });
   }
 }

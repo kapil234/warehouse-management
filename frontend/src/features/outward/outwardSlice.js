@@ -322,6 +322,22 @@ export const downloadItemProof = createAsyncThunk(
   }
 );
 
+// Opens the PI (proforma invoice) file of an entry in a new tab (Sales / Account / Admin only).
+export const downloadPiFile = createAsyncThunk(
+  "outward/downloadPiFile",
+  async ({ outwardId }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.get(`/api/outward/${outwardId}/pi-file`);
+      const url = data.data?.url;
+      if (!url) throw new Error("Download URL was not generated.");
+      window.open(url, "_blank", "noopener,noreferrer");
+      return { outwardId };
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || err.message || "Unable to open the PI file.");
+    }
+  }
+);
+
 // Used both by the create-form (right after dispatch creation)
 // and the detail page (uploading a missing required doc).
 export const uploadOutwardDocument = createAsyncThunk(

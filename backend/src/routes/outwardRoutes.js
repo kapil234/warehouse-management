@@ -7,7 +7,9 @@ import {
   approveOutward,
   rejectOutward,
   dispatchOutward,
+  saveAccountDocuments,
   downloadItemProof,
+  downloadPiFile,
   listOutwardModels,
   listOutwardStock,
   createOutwardModel,
@@ -23,8 +25,9 @@ import { upload } from "../middleware/uploadMiddleware.js";
 /**
  * Outward workflow
  *
- *   SALES              creates / edits (cost + UTR / proof)  -> PENDING_APPROVAL
- *   ACCOUNT            approves or rejects the cost          -> PENDING_DISPATCH / REJECTED
+ *   SALES              creates / edits (PI details + payment status, UTR / proof)  -> PENDING_APPROVAL
+ *   ACCOUNT            approves or rejects the entry         -> PENDING_DISPATCH / REJECTED
+ *   ACCOUNT            also adds invoice / e-way bill / other reference documents + files (before dispatch)
  *   WAREHOUSE_MANAGER  fills the dispatch details            -> DISPATCHED
  *   SUPER_ADMIN        can do every step
  *
@@ -53,7 +56,7 @@ router.put("/:id", authorize("SUPER_ADMIN", "SALES"), updateOutward);
 
 // Outward entries cannot be deleted by anyone (Super admin can update them at any time instead).
 
-// Account decision on the cost side.
+// Account decision on the PI / payment details.
 router.post("/:id/approve", authorize("SUPER_ADMIN", "ACCOUNT"), approveOutward);
 router.post("/:id/reject", authorize("SUPER_ADMIN", "ACCOUNT"), rejectOutward);
 
@@ -61,8 +64,14 @@ router.post("/:id/reject", authorize("SUPER_ADMIN", "ACCOUNT"), rejectOutward);
 // Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.
 router.put("/:id/dispatch", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.array("files", 10), dispatchOutward);
 
+// Account adds its own reference documents (invoice / e-way bill / other) and files before dispatch.
+router.put("/:id/account-documents", authorize("SUPER_ADMIN", "ACCOUNT"), upload.array("files", 10), saveAccountDocuments);
+
 // Payment proof of an item - never reachable by the warehouse manager.
 router.get("/:id/items/:itemId/proof", authorize("SUPER_ADMIN", "SALES", "ACCOUNT"), downloadItemProof);
+
+// PI (proforma invoice) file - never reachable by the warehouse manager.
+router.get("/:id/pi-file", authorize("SUPER_ADMIN", "SALES", "ACCOUNT"), downloadPiFile);
 
 // Dispatch documents (challan / e-way bill / photo) are a warehouse job.
 router.post("/:id/documents", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.single("file"), uploadOutwardDocument);

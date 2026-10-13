@@ -13,7 +13,7 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isPlaceholder, costStatusLabel, formatMoney, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
+import { isPlaceholder, paymentStatusLabel, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 
 /**
@@ -199,7 +199,7 @@ export default function OutwardDispatch() {
 
   const items = outward.items || [];
   const accountRefs = (Array.isArray(outward.referenceDocuments) ? outward.referenceDocuments : []).filter(isAccountRef);
-  // Super admin also sees the sales side (cost, cost status, UTR, proof, approval) and can update it.
+  // Super admin also sees the sales side (PI details, payment status, UTR, proof, approval) and can update it.
   const showCost = superAdmin;
 
   const handleViewProof = (itemId) => {
@@ -237,6 +237,9 @@ export default function OutwardDispatch() {
               <InfoField label="Customer / Recipient" value={outward.customerName} />
               <InfoField label="Company" value={outward.companyName || outward.warehouse?.company?.name} />
               <InfoField label="Outward type" value={outward.outwardType} />
+              {showCost && <InfoField label="PI No." value={outward.piNumber} />}
+              {showCost && <InfoField label="PI date" value={outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"} />}
+              {showCost && <InfoField label="PI amount" value={outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")} />}
               <InfoField label="Warehouse" value={outward.warehouse?.name} />
               <InfoField label="Created by" value={outward.createdBy?.name || outward.createdBy?.email} />
               {showCost && <InfoField label="Approved by" value={outward.approvedByName} />}
@@ -320,7 +323,7 @@ export default function OutwardDispatch() {
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
             <h2 className="mb-4 text-sm font-semibold text-gray-900">Item details</h2>
             <div className="overflow-x-auto rounded-lg border">
-              <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[760px]" : ""}`}>
+              <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
                 <thead>
                   <tr className="border-b bg-gray-50 text-left text-gray-500">
                     <th className="px-3 py-2">#</th>
@@ -330,8 +333,7 @@ export default function OutwardDispatch() {
                     <th className="px-3 py-2">UOM</th>
                     {showCost && (
                       <>
-                        <th className="px-3 py-2">Cost</th>
-                        <th className="px-3 py-2">Cost status</th>
+                        <th className="px-3 py-2">Payment status</th>
                         <th className="px-3 py-2">UTR</th>
                         <th className="px-3 py-2">Proof</th>
                       </>
@@ -348,8 +350,7 @@ export default function OutwardDispatch() {
                       <td className="px-3 py-2">{item.uom || "-"}</td>
                       {showCost && (
                         <>
-                          <td className="px-3 py-2 font-medium">{formatMoney(item.cost)}</td>
-                          <td className="px-3 py-2">{costStatusLabel(item.costStatus)}</td>
+                          <td className="px-3 py-2">{paymentStatusLabel(item.paymentStatus)}</td>
                           <td className="px-3 py-2 break-all">{item.utrNumber || "-"}</td>
                           <td className="px-3 py-2">
                             {item.hasProof ? (
@@ -360,13 +361,6 @@ export default function OutwardDispatch() {
                       )}
                     </tr>
                   ))}
-                  {showCost && items.length > 0 && (
-                    <tr className="border-t bg-gray-50 font-semibold text-gray-900">
-                      <td colSpan={5} className="px-3 py-2 text-right">Total cost</td>
-                      <td className="px-3 py-2">{formatMoney(items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0))}</td>
-                      <td colSpan={3}></td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>

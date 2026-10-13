@@ -18,12 +18,19 @@ import {
   getUserCompanyIds,
   sanitizeForWarehouse,
   shapeForFinance,
-  validateItemCost,
+  validateItemPayment,
+  validatePi,
+  toPiColumns,
   toItemRow,
   proofKeyProblem,
+  ACCOUNT_REF_TYPES,
+  ACCOUNT_DOC_STATUSES,
+  canonicalAccountRefType,
+  isAccountRefType,
+  isAccountDocCategory,
 } from "../utils/outwardWorkflow.js";
 
-const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "E-way bill", "Dispatch photo"];
+const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "Dispatch photo"];
 
 // Create / edit run the stock check and the save in one serializable transaction.
 const STOCK_TRANSACTION_OPTIONS = { isolationLevel: "Serializable", maxWait: 10000, timeout: 30000 };
@@ -156,7 +163,9 @@ function finishFor(req, entry, allDocs) {
   let docsVisible = true;
   if (isFinanceSide(req.user.role)) docsVisible = entry.status === STATUS.DISPATCHED;
   else if (req.user.role === "SUPER_ADMIN") docsVisible = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED].includes(entry.status);
-  const docs = docsVisible ? allDocs : [];
+  let docs = docsVisible ? allDocs : [];
+  // Account always sees (and, until dispatch, manages) its own invoice / e-way bill / other documents.
+  if (req.user.role === "ACCOUNT" && !docsVisible) docs = allDocs.filter((d) => isAccountDocCategory(d.docCategory));
   return { ...shaped, workflowStatus, ...documentStatus(docs), documents: docs };
 }
 
@@ -180,6 +189,7 @@ export async function listOutward(req, res) {
           { customerName: { contains: search, mode: "insensitive" } },
           { companyName: { contains: search, mode: "insensitive" } },
           { refDocNumber: { contains: search, mode: "insensitive" } },
+          { piNumber: { contains: search, mode: "insensitive" } },
         ] } : {},
         type ? { outwardType: type } : {},
         dateFrom || dateTo ? { createdAt: {
@@ -360,46 +370,57 @@ export async function createOutwardCompany(req, res) {
  
  
 // ---------------------------------------------------------------------------
-// Validation shared by create + update (Sales side: customer + items + cost)
+// Validation shared by create + update (Sales side: customer + PI + items + payment status)
 // ---------------------------------------------------------------------------
 function validateSalesPayload(data, items) {
   if (!data.outwardType) return "outwardType is required";
   if (!data.customerName?.trim()) return "customerName is required";
   if (!data.companyName?.trim()) return "companyName is required";
+  const piError = validatePi(data);
+  if (piError) return piError;
   if (!items.length) return "At least one item is required";
   for (const [index, item] of items.entries()) {
     const label = `Item ${index + 1}`;
     if (!item.category || !item.sku?.trim()) return `${label}: category and model are required`;
     if (Number(item.quantity) <= 0) return `${label}: quantity must be greater than 0`;
     if (!item.uom) return `${label}: UOM is required`;
-    const costError = validateItemCost(item, label);
-    if (costError) return costError;
+    const paymentError = validateItemPayment(item, label);
+    if (paymentError) return paymentError;
   }
   return null;
 }
 
 // Only quantity-level facts go into audit rows that the warehouse can read.
-const costFingerprint = (i) => JSON.stringify([Number(i.cost ?? 0), i.costStatus || null, i.utrNumber || null, Boolean(i.proofFileKey)]);
+const paymentFingerprint = (i) => JSON.stringify([i.paymentStatus || null, i.utrNumber || null, Boolean(i.proofFileKey)]);
 const itemMatchKey = (i) => [i.category, i.sku, i.uom].join("::").toLowerCase();
 
 
-// Moves proofs that were picked before the entry existed (uploads/<id>/...) into min/<outward number>/.
-// Runs in parallel; a proof that fails to move simply stays where it is (it still downloads fine).
+// Moves proofs / the PI file that were picked before the entry existed (uploads/<id>/...) into min/<outward number>/.
+// Runs in parallel; a file that fails to move simply stays where it is (it still downloads fine).
 async function moveTempProofs(minId, outwardNumber) {
-  const rows = await prisma.minItem.findMany({
-    where: { minId, proofFileKey: { startsWith: "uploads/" } },
-    select: { id: true, proofFileKey: true },
-  });
-  if (!rows.length) return;
+  const [rows, entry] = await Promise.all([
+    prisma.minItem.findMany({
+      where: { minId, proofFileKey: { startsWith: "uploads/" } },
+      select: { id: true, proofFileKey: true },
+    }),
+    prisma.min.findUnique({ where: { id: minId }, select: { piFileKey: true } }),
+  ]);
   const folder = outwardFolder(outwardNumber);
-  await Promise.all(
-    rows.map(async (row) => {
-      const target = `${folder}${row.proofFileKey.split("/").pop()}`;
-      const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(row.proofFileKey, target);
-      if (error) return console.error("Proof move failed:", row.proofFileKey, error.message);
-      await prisma.minItem.update({ where: { id: row.id }, data: { proofFileKey: target } });
-    })
-  );
+  const jobs = rows.map(async (row) => {
+    const target = `${folder}${row.proofFileKey.split("/").pop()}`;
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(row.proofFileKey, target);
+    if (error) return console.error("Proof move failed:", row.proofFileKey, error.message);
+    await prisma.minItem.update({ where: { id: row.id }, data: { proofFileKey: target } });
+  });
+  if (entry?.piFileKey?.startsWith("uploads/")) {
+    jobs.push((async () => {
+      const target = `${folder}${entry.piFileKey.split("/").pop()}`;
+      const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(entry.piFileKey, target);
+      if (error) return console.error("PI file move failed:", entry.piFileKey, error.message);
+      await prisma.min.update({ where: { id: minId }, data: { piFileKey: target } });
+    })());
+  }
+  await Promise.all(jobs);
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +444,7 @@ export async function createOutward(req, res) {
     // min/<warehouse code>/<id>/ before the entry exists.
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const newMinId = UUID_RE.test(String(data.id || "")) ? String(data.id).toLowerCase() : randomUUID();
-    const proofProblem = proofKeyProblem(items, newMinId);
+    const proofProblem = proofKeyProblem(items, newMinId, undefined, data.piFileKey);
     if (proofProblem) return res.status(422).json({ message: proofProblem });
 
     const [unknownItems, outwardCount] = await Promise.all([
@@ -455,6 +476,7 @@ export async function createOutward(req, res) {
               outwardType: data.outwardType,
               customerName: data.customerName.trim(),
               companyName: data.companyName.trim(),
+              ...toPiColumns(data),
               refDocType: PLACEHOLDER,
               refDocNumber: PLACEHOLDER,
               refDocDate: data.outwardDateTime ? new Date(data.outwardDateTime) : new Date(),
@@ -499,8 +521,7 @@ export async function createOutward(req, res) {
 // ---------------------------------------------------------------------------
 // UPDATE  (Sales until dispatch, Super admin any time)
 // PENDING_APPROVAL / REJECTED  -> always (re)submitted to Account.
-// PENDING_DISPATCH             -> back to Account only when cost / item details
-//                                 changed; header-only edits keep it approved.
+// PENDING_DISPATCH             -> any update goes back to Account for approval.
 // DISPATCHED                   -> Super admin only, status unchanged.
 // ---------------------------------------------------------------------------
 export async function updateOutward(req, res) {
@@ -514,6 +535,7 @@ export async function updateOutward(req, res) {
       select: {
         id: true, warehouseId: true, outwardNumber: true, status: true, createdById: true,
         outwardType: true, customerName: true, companyName: true,
+        piNumber: true, piDate: true, piAmount: true, piFileKey: true, piFileName: true, piFileType: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
         dispatchMode: true, vehicleNumber: true, remarks: true,
         items: true,
@@ -537,7 +559,7 @@ export async function updateOutward(req, res) {
     }
 
     const warehouse = await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
-    const proofProblem = proofKeyProblem(items, id, existing.outwardNumber);
+    const proofProblem = proofKeyProblem(items, id, existing.outwardNumber, data.piFileKey);
     if (proofProblem) return res.status(422).json({ message: proofProblem });
     if (!data.companyId || warehouse.companyId !== data.companyId) {
       return res.status(400).json({ message: "Selected company does not match this warehouse." });
@@ -552,6 +574,7 @@ export async function updateOutward(req, res) {
 
     const problem = validateSalesPayload(data, normalized);
     if (problem) return res.status(422).json({ message: problem });
+    const piColumns = toPiColumns(data, existing);
 
     const unknownItems = await findUnknownProducts(normalized, existing.items);
     if (unknownItems.length) return res.status(422).json({ message: unknownProductsMessage(unknownItems) });
@@ -590,13 +613,20 @@ export async function updateOutward(req, res) {
       companyName: data.companyName.trim(),
     };
     const fieldChanges = diffFields(existing, newSnapshot, ["outwardType", "customerName", "companyName"]);
+    const isoDay = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+    const piChanges = diffFields(
+      { piNumber: existing.piNumber, piDate: isoDay(existing.piDate), piAmount: existing.piAmount === null ? null : Number(existing.piAmount) },
+      { piNumber: piColumns.piNumber, piDate: isoDay(piColumns.piDate), piAmount: piColumns.piAmount },
+      ["piNumber", "piDate", "piAmount"]
+    );
+    const piFileChanged = (existing.piFileKey || null) !== (piColumns.piFileKey || null);
     const itemChanges = diffItems(existing.items, newItems);
 
-    // Cost side changes are logged in one line that warehouse managers never see.
+    // Payment side changes are logged in one line that warehouse managers never see.
     const oldByKey = new Map(existing.items.map((i) => [itemMatchKey(i), i]));
-    const costChanged = newItems.some((n) => {
+    const paymentChanged = newItems.some((n) => {
       const o = oldByKey.get(itemMatchKey(n));
-      return !o || costFingerprint(o) !== costFingerprint(n);
+      return !o || paymentFingerprint(o) !== paymentFingerprint(n);
     });
 
     let sentForApproval = false;
@@ -625,6 +655,7 @@ export async function updateOutward(req, res) {
           outwardType: data.outwardType,
           customerName: data.customerName.trim(),
           companyName: data.companyName.trim(),
+          ...piColumns,
           ...(data.outwardDateTime ? { refDocDate: new Date(data.outwardDateTime) } : {}),
           ...(dispatchUpdate ? dispatchUpdate.snapshot : {}),
           ...(resubmit
@@ -658,12 +689,25 @@ export async function updateOutward(req, res) {
       for (const { item, oldQuantity, newQuantity } of itemChanges.updated) {
         entries.push({ ...base, action: "ITEM_UPDATED", description: `Quantity updated for ${describeItem(item)} from ${oldQuantity} to ${newQuantity} ${item.uom}`, changes: { field: "quantity", item: describeItem(item), oldValue: oldQuantity, newValue: newQuantity } });
       }
-      if (costChanged) entries.push({ ...base, action: "COST_UPDATED", description: "Cost details updated" });
+      for (const change of piChanges) {
+        entries.push({ ...base, action: "PI_UPDATED", description: `${change.label} updated from "${change.oldValue ?? "—"}" to "${change.newValue ?? "—"}"`, changes: change });
+      }
+      if (piFileChanged) entries.push({ ...base, action: "PI_UPDATED", description: piColumns.piFileKey ? "PI file attached / replaced" : "PI file removed" });
+      if (paymentChanged) entries.push({ ...base, action: "PAYMENT_UPDATED", description: "Payment details updated" });
       if (wasRejected) entries.push({ ...base, action: "RESUBMITTED", description: "Resubmitted for account approval" });
       else if (wasApproved) entries.push({ ...base, action: "RESUBMITTED", description: "Updated after approval - sent for account approval again" });
       if (!entries.length) entries.push({ ...base, action: "UPDATED", description: "Outward entry saved with no field changes" });
       await recordAuditLogs(tx, entries);
     }, STOCK_TRANSACTION_OPTIONS);
+
+    // A payment proof that was replaced or removed is deleted from storage too.
+    const keptProofKeys = new Set(newItems.map((i) => i.proofFileKey).filter(Boolean));
+    const droppedProofs = [...new Set(existing.items.map((i) => i.proofFileKey).filter((k) => k && !keptProofKeys.has(k)))];
+    if (existing.piFileKey && existing.piFileKey !== piColumns.piFileKey) droppedProofs.push(existing.piFileKey);
+    if (droppedProofs.length) {
+      const { error: proofCleanupError } = await supabase.storage.from(SUPABASE_BUCKET).remove(droppedProofs);
+      if (proofCleanupError) console.error("Old payment proof cleanup failed:", proofCleanupError.message);
+    }
 
     // Same shape as GET /:id, so the client never shows a half-filled or stale entry after an edit.
     const result = await prisma.min.findUnique({
@@ -718,7 +762,7 @@ export async function approveOutward(req, res) {
 
     await recordAuditLog(prisma, {
       entityType: "OUTWARD", entityId: min.id, entityNumber: min.outwardNumber,
-      action: "APPROVED", description: `Cost approved by ${req.user.name}${remarks ? ` — ${remarks}` : ""}`,
+      action: "APPROVED", description: `Approved by ${req.user.name}${remarks ? ` — ${remarks}` : ""}`,
       userId: req.user.id, warehouseId: min.warehouseId,
     });
     return res.json({ message: "Approved. Sent to the warehouse manager for dispatch." });
@@ -760,7 +804,7 @@ export async function rejectOutward(req, res) {
 
 // ---------------------------------------------------------------------------
 // DISPATCH  (Warehouse manager, Super admin)
-// Fills the dispatch details on an approved entry. Items / cost are not touched.
+// Fills the dispatch details on an approved entry. Items / PI / payment are not touched.
 // After this the entry is locked - only a Super admin can change it again.
 // ---------------------------------------------------------------------------
 export async function dispatchOutward(req, res) {
@@ -801,25 +845,32 @@ export async function dispatchOutward(req, res) {
     }
 
     if (!data.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
+    // Invoice / E-way bill references belong to the account team; the dispatch side only has
+    // delivery challan, return note and other. Account's rows are never touched here.
     const normalizedRefs = references
-      .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
+      .filter((r) => r && String(r.refDocNumber || "").trim())
       .map((r) => ({
         refDocType: String(r.refDocType || "Other").trim(),
-        refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
-        ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
+        refDocNumber: String(r.refDocNumber).trim(),
+        ewayBillNumber: null,
       }));
     if (!normalizedRefs.length) return res.status(422).json({ message: "At least one reference document is required" });
+    if (normalizedRefs.some((r) => isAccountRefType(r.refDocType))) {
+      return res.status(422).json({ message: "Invoice and e-way bill references are added by the account team" });
+    }
+    if (req.user.role !== "SUPER_ADMIN" && categories.some((c) => isAccountDocCategory(c))) {
+      return res.status(422).json({ message: "Invoice and e-way bill documents are added by the account team" });
+    }
 
     const newSnapshot = {
       refDocType: normalizedRefs[0].refDocType,
       refDocNumber: normalizedRefs[0].refDocNumber,
-      ewayBillNumber: normalizedRefs[0].ewayBillNumber,
       dispatchMode: data.dispatchMode,
       vehicleNumber: data.vehicleNumber?.trim() || null,
       remarks: data.remarks?.trim() || null,
     };
     const changes = existing.status === STATUS.DISPATCHED
-      ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "remarks"])
+      ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "dispatchMode", "vehicleNumber", "remarks"])
       : [];
 
     // Files go to storage first (in parallel); the database write below then saves the dispatch
@@ -844,7 +895,7 @@ export async function dispatchOutward(req, res) {
           },
         });
         if (!count) throw httpError(409, "This entry is not ready for dispatch");
-        await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: {}, create: normalizedRefs } } });
+        await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: { NOT: { refDocType: { in: ACCOUNT_REF_TYPES } } }, create: normalizedRefs } } });
 
         if (uploaded.length) {
           // A new file for a document that already exists replaces it.
@@ -864,7 +915,10 @@ export async function dispatchOutward(req, res) {
       if (uploaded.length) await supabase.storage.from(SUPABASE_BUCKET).remove(uploaded.map((u) => u.fileKey)).catch(() => {});
       throw txError;
     }
-    if (replaced.length) supabase.storage.from(SUPABASE_BUCKET).remove(replaced.map((d) => d.fileKey)).catch((err) => console.error("Old document cleanup failed:", err));
+    if (replaced.length) {
+      const { error: cleanupError } = await supabase.storage.from(SUPABASE_BUCKET).remove(replaced.map((d) => d.fileKey));
+      if (cleanupError) console.error("Old document cleanup failed:", cleanupError.message);
+    }
 
     const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
     const entries = existing.status === STATUS.PENDING_DISPATCH
@@ -888,6 +942,116 @@ export async function dispatchOutward(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// ACCOUNT DOCUMENTS  (Account, Super admin) - until the entry is dispatched
+// Account's own reference documents (Invoice / E-way Bill / Other) and files (invoice, e-way bill, other).
+// Only the account-owned reference rows are replaced; the warehouse manager's rows stay as they are.
+// Same request shape as dispatch: JSON, or multipart (payload + files + categories).
+// ---------------------------------------------------------------------------
+export async function saveAccountDocuments(req, res) {
+  try {
+    const { id } = req.params;
+    let data = req.body || {};
+    let categories = [];
+    if (typeof data.payload === "string") {
+      try {
+        categories = JSON.parse(data.categories || "[]");
+        data = JSON.parse(data.payload);
+      } catch {
+        return res.status(422).json({ message: "Invalid document data" });
+      }
+    }
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length && files.length !== categories.length) return res.status(422).json({ message: "Each document needs a name" });
+    if (categories.some((c) => !isAccountDocCategory(c))) {
+      return res.status(422).json({ message: "Account can only add invoice, e-way bill and other account documents" });
+    }
+
+    const rawRefs = Array.isArray(data.referenceDocuments) ? data.referenceDocuments : [];
+    const refs = [];
+    for (const r of rawRefs) {
+      if (!r || !(String(r.refDocNumber || "").trim() || String(r.ewayBillNumber || "").trim())) continue;
+      const type = canonicalAccountRefType(r.refDocType);
+      if (!type) return res.status(422).json({ message: "Account reference documents can only be Invoice, E-way Bill or Other" });
+      const eway = String(r.ewayBillNumber || "").trim();
+      refs.push({
+        refDocType: type,
+        refDocNumber: String(r.refDocNumber || "").trim() || eway,
+        ewayBillNumber: eway || null,
+      });
+    }
+
+    const existing = await prisma.min.findUnique({
+      where: { id },
+      select: { id: true, warehouseId: true, outwardNumber: true, status: true, createdById: true },
+    });
+    if (!existing) return res.status(404).json({ message: "Outward entry not found" });
+    await assertEntryVisible(req, existing);
+    if (!ACCOUNT_DOC_STATUSES.includes(existing.status)) {
+      return res.status(409).json({ message: "Documents can no longer be changed after dispatch" });
+    }
+
+    const uploaded = files.length ? await storeOutwardFiles(files, categories, existing.outwardNumber) : [];
+    let replaced = [];
+    try {
+      await prisma.$transaction(async (tx) => {
+        const current = await tx.min.findFirst({ where: { id, status: { in: ACCOUNT_DOC_STATUSES } }, select: { id: true } });
+        if (!current) throw httpError(409, "This entry was just updated by someone else");
+
+        await tx.min.update({
+          where: { id },
+          data: { referenceDocuments: { deleteMany: { refDocType: { in: ACCOUNT_REF_TYPES } }, create: refs } },
+        });
+
+        if (uploaded.length) {
+          // A new file for a document that already exists replaces it.
+          const names = new Set(uploaded.map((u) => u.docCategory.trim().toLowerCase()));
+          const old = await tx.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { id: true, fileKey: true, docCategory: true } });
+          replaced = old.filter((d) => names.has(String(d.docCategory || "").trim().toLowerCase()));
+          if (replaced.length) await tx.document.deleteMany({ where: { id: { in: replaced.map((d) => d.id) } } });
+          await tx.document.createMany({
+            data: uploaded.map((u) => ({
+              linkedType: "outward", linkedId: id, docCategory: u.docCategory,
+              fileKey: u.fileKey, fileType: u.fileType, fileSize: u.fileSize, uploadedById: req.user.id,
+            })),
+          });
+        }
+      });
+    } catch (txError) {
+      if (uploaded.length) await supabase.storage.from(SUPABASE_BUCKET).remove(uploaded.map((u) => u.fileKey)).catch(() => {});
+      throw txError;
+    }
+    if (replaced.length) {
+      const { error: cleanupError } = await supabase.storage.from(SUPABASE_BUCKET).remove(replaced.map((d) => d.fileKey));
+      if (cleanupError) console.error("Old document cleanup failed:", cleanupError.message);
+    }
+
+    const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
+    const entries = [{ ...base, action: "UPDATED", description: `Account reference documents saved (${refs.length})` }];
+    for (const u of uploaded) {
+      entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
+    }
+    recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (account documents) failed:", err));
+
+    const [result, documents] = await Promise.all([
+      prisma.min.findUnique({
+        where: { id },
+        include: {
+          items: true,
+          referenceDocuments: true,
+          createdBy: { select: { name: true, email: true, role: true } },
+          warehouse: { select: { id: true, name: true, code: true, companyId: true, Inward: true, Outward: true, company: { select: { name: true, status: true } } } },
+        },
+      }),
+      prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, orderBy: { uploadedAt: "desc" } }),
+    ]);
+    return res.json({ message: "Documents saved", data: finishFor(req, result, documents) });
+  } catch (error) {
+    console.error("Save account documents error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to save documents" });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // DELETE  (Super admin only, and only after the entry has been dispatched)
 // Removes the entry, its items, reference documents and uploaded files.
 // Stock is calculated from the entries, so the quantities return to stock.
@@ -897,7 +1061,7 @@ export async function deleteOutward(req, res) {
     const { id } = req.params;
     const existing = await prisma.min.findUnique({
       where: { id },
-      select: { id: true, outwardNumber: true, warehouseId: true, status: true, items: { select: { proofFileKey: true } } },
+      select: { id: true, outwardNumber: true, warehouseId: true, status: true, piFileKey: true, items: { select: { proofFileKey: true } } },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
     if (existing.status !== STATUS.DISPATCHED) {
@@ -905,7 +1069,7 @@ export async function deleteOutward(req, res) {
     }
 
     const documents = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { id: true, fileKey: true } });
-    const fileKeys = [...documents.map((d) => d.fileKey), ...existing.items.map((i) => i.proofFileKey)].filter(Boolean);
+    const fileKeys = [...documents.map((d) => d.fileKey), ...existing.items.map((i) => i.proofFileKey), existing.piFileKey].filter(Boolean);
     if (fileKeys.length) {
       const { error } = await supabase.storage.from(SUPABASE_BUCKET).remove(fileKeys);
       if (error) return res.status(500).json({ message: "Failed to delete files from storage.", error: error.message });
@@ -950,6 +1114,26 @@ export async function downloadItemProof(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/outward/:id/pi-file   (Sales, Account, Super admin only)
+// ---------------------------------------------------------------------------
+export async function downloadPiFile(req, res) {
+  try {
+    const min = await prisma.min.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, warehouseId: true, createdById: true, status: true, piFileKey: true },
+    });
+    if (!min || !min.piFileKey) return res.status(404).json({ message: "No PI file for this entry" });
+    await assertEntryVisible(req, min);
+
+    const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).createSignedUrl(min.piFileKey, 60 * 5);
+    if (error) return res.status(500).json({ message: "Failed to create download link.", error: error.message });
+    return res.json({ data: { url: data.signedUrl } });
+  } catch (error) {
+    return res.status(error.status || 500).json({ message: error.message || "Failed to download PI file" });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // HISTORY
 // ---------------------------------------------------------------------------
 export async function listOutwardHistory(req, res) {
@@ -963,7 +1147,7 @@ export async function listOutwardHistory(req, res) {
     const isWarehouse = req.user.role === "WAREHOUSE_MANAGER";
 
     // Sales only sees the trail of their own entries and the super admin's entries for their company; a warehouse manager only
-    // the entries that reached the warehouse, minus the cost / approval lines.
+    // the entries that reached the warehouse, minus the PI / payment / approval lines.
     let entityFilter = {};
     if (req.user.role === "SALES" || isWarehouse) {
       const mins = await prisma.min.findMany({

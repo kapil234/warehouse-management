@@ -1,7 +1,7 @@
 import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog } from "../utils/auditLog.js";
-import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, outwardFolder } from "../utils/outwardWorkflow.js";
+import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, outwardFolder, isAccountDocCategory, ACCOUNT_DOC_STATUSES } from "../utils/outwardWorkflow.js";
  
 // assertLinkedEntryAccess used to be 3 sequential round-trips (entry, then
 // its warehouse, then the caller's warehouse access) plus a 4th one later
@@ -11,7 +11,7 @@ import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, o
 // the access-grant check (still a separate query - Prisma can't filter an
 // arbitrary user's access as part of the same call) is skipped entirely
 // for SUPER_ADMIN, who bypasses it anyway.
-async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = null) {
+async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = null, category = null) {
   const model = linkedType === "grn" ? prisma.grn : prisma.min;
   const numberField = linkedType === "grn" ? "grnNumber" : "outwardNumber";
 
@@ -38,6 +38,26 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
     // The documents section only exists from dispatch details onwards.
     if (linkedType === "outward" && ![STATUS.PENDING_DISPATCH, STATUS.DISPATCHED].includes(entry.status)) {
       throw Object.assign(new Error("Documents are available after approval."), { status: 409 });
+    }
+    return entry;
+  }
+
+  // Account owns the invoice / e-way bill / other documents of an outward entry: it can open them at any
+  // stage, and delete them until the entry is dispatched (uploads travel with PUT /:id/account-documents).
+  if (req.user.role === "ACCOUNT" && linkedType === "outward") {
+    const companyIds = await getUserCompanyIds(req.user);
+    if (!warehouse.companyId || !companyIds.includes(warehouse.companyId)) {
+      throw Object.assign(new Error("You don't have access to this document."), { status: 403 });
+    }
+    if (permission) {
+      if (!ACCOUNT_DOC_STATUSES.includes(entry.status)) {
+        throw Object.assign(new Error("Documents can no longer be changed after dispatch."), { status: 409 });
+      }
+      if (!isAccountDocCategory(category)) {
+        throw Object.assign(new Error("Account can only manage invoice, e-way bill and other account documents."), { status: 403 });
+      }
+    } else if (entry.status !== STATUS.DISPATCHED && !isAccountDocCategory(category)) {
+      throw Object.assign(new Error("Dispatch documents are available after dispatch."), { status: 403 });
     }
     return entry;
   }
@@ -137,6 +157,9 @@ async function uploadLinkedDocument(req, res, linkedType) {
     }
  
     const category = sanitizeCategory(req.body.docCategory);
+    if (linkedType === "outward" && req.user.role === "WAREHOUSE_MANAGER" && isAccountDocCategory(category)) {
+      return res.status(403).json({ message: "Invoice and e-way bill documents are added by the account team." });
+    }
     const file = req.file;
     const originalName = file.originalname;
     const fileType = file.mimetype;
@@ -196,7 +219,7 @@ export async function downloadDocument(req, res) {
   try {
     const document = await prisma.document.findUnique({ where: { id: req.params.id } });
     if (!document) return res.status(404).json({ message: "Document not found." });
-    await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, null);
+    await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, null, document.docCategory);
     const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).createSignedUrl(document.fileKey, 60 * 5);
     if (error) return res.status(500).json({ message: "Failed to create download link.", error: error.message });
     return res.json({ message: "Download link created", data: { url: data.signedUrl } });
@@ -209,7 +232,11 @@ export async function deleteDocument(req, res) {
   try {
     const document = await prisma.document.findUnique({ where: { id: req.params.id } });
     if (!document) return res.status(404).json({ message: "Document not found." });
-    const entry = await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, "canManageDocuments");
+    const entry = await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, "canManageDocuments", document.docCategory);
+    // The warehouse manager can see the account team's documents but never remove them.
+    if (document.linkedType === "outward" && req.user.role === "WAREHOUSE_MANAGER" && isAccountDocCategory(document.docCategory)) {
+      return res.status(403).json({ message: "Invoice and e-way bill documents are managed by the account team." });
+    }
     const { error } = await supabase.storage.from(SUPABASE_BUCKET).remove([document.fileKey]);
     if (error) return res.status(500).json({ message: "Failed to delete file from storage.", error: error.message });
     await prisma.document.delete({ where: { id: document.id } });

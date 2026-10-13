@@ -21,6 +21,7 @@ import {
   approveOutward,
   rejectOutward,
   downloadItemProof,
+  downloadPiFile,
   clearCurrentOutward,
   selectCurrentOutward,
   selectOutwardDetailStatus,
@@ -30,7 +31,7 @@ import {
   REQUIRED_DOCUMENTS,
   WORKFLOW_STATUS,
   DISPATCH_STATE,
-  costStatusLabel,
+  paymentStatusLabel,
   formatMoney,
   isPlaceholder,
   ACCOUNT_EDIT_STATUSES,
@@ -112,6 +113,12 @@ export default function OutwardDetail() {
   const handleViewProof = (itemId) => {
     dispatch(downloadItemProof({ outwardId: id, itemId })).then((result) => {
       if (downloadItemProof.rejected.match(result)) toast.error(result.payload || "Unable to open the proof file.");
+    });
+  };
+
+  const handleViewPi = () => {
+    dispatch(downloadPiFile({ outwardId: id })).then((result) => {
+      if (downloadPiFile.rejected.match(result)) toast.error(result.payload || "Unable to open the PI file.");
     });
   };
 
@@ -280,6 +287,21 @@ export default function OutwardDetail() {
             <Info icon={<User size={18} />} label="Customer" value={outward.customerName || "-"} />
             <Info icon={<User size={18} />} label="Company" value={outward.companyName || outward.warehouse?.company?.name || "-"} />
             <Info icon={<Truck size={18} />} label="Outward Type" value={outward.outwardType || "-"} />
+            {showCost && (
+              <>
+                <Info icon={<Hash size={18} />} label="PI No." value={outward.piNumber || "-"} />
+                <Info icon={<Calendar size={18} />} label="PI Date" value={outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"} />
+                <Info label="PI Amount" value={formatMoney(outward.piAmount)} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-1 sm:gap-2 sm:text-sm"><Paperclip size={18} />PI File</div>
+                  {outward.hasPiFile ? (
+                    <button type="button" onClick={handleViewPi} className="text-sm font-medium text-blue-700 hover:underline sm:text-base">View file</button>
+                  ) : (
+                    <div className="text-sm font-medium text-gray-900 sm:text-base">-</div>
+                  )}
+                </div>
+              </>
+            )}
             <Info
               icon={<Calendar size={18} />}
               label={dispatched && (isSuperAdmin || isWarehouse) ? "Dispatch Date" : "Outward Date"}
@@ -354,7 +376,7 @@ export default function OutwardDetail() {
           <h2 className="text-lg font-semibold text-gray-900 mb-5">Items</h2>
 
           <div className={showCost ? "overflow-x-auto" : ""}>
-          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[760px]" : "table-fixed"}`}>
+          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : "table-fixed"}`}>
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
@@ -364,8 +386,7 @@ export default function OutwardDetail() {
                 <th className="py-2 px-1 sm:py-3 sm:px-3">UOM</th>
                 {showCost && (
                   <>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">Cost</th>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">Cost status</th>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">Payment status</th>
                     <th className="py-2 px-1 sm:py-3 sm:px-3">UTR</th>
                     <th className="py-2 px-1 sm:py-3 sm:px-3">Proof</th>
                   </>
@@ -382,18 +403,17 @@ export default function OutwardDetail() {
                   <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
                   {showCost && (
                     <>
-                      <td className="py-2 px-1 font-medium sm:py-4 sm:px-3">{formatMoney(item.cost)}</td>
                       <td className="py-2 px-1 sm:py-4 sm:px-3">
                         <span
                           className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold sm:text-xs ${
-                            item.costStatus === "COMPLETED"
+                            item.paymentStatus === "COMPLETED"
                               ? "bg-green-100 text-green-700"
-                              : item.costStatus === "PARTIALLY_COMPLETED"
+                              : item.paymentStatus === "PARTIALLY_COMPLETED"
                               ? "bg-blue-100 text-blue-700"
                               : "bg-amber-100 text-amber-700"
                           }`}
                         >
-                          {costStatusLabel(item.costStatus)}
+                          {paymentStatusLabel(item.paymentStatus)}
                         </span>
                       </td>
                       <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.utrNumber || "-"}</td>
@@ -412,16 +432,9 @@ export default function OutwardDetail() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={showCost ? 9 : 5} className="text-center py-8 text-gray-500">
+                  <td colSpan={showCost ? 8 : 5} className="text-center py-8 text-gray-500">
                     No items found
                   </td>
-                </tr>
-              )}
-              {showCost && items.length > 0 && (
-                <tr className="border-t bg-gray-50 font-semibold text-gray-900">
-                  <td colSpan="5" className="py-3 px-1 text-right sm:px-3">Total cost</td>
-                  <td className="py-3 px-1 sm:px-3">{formatMoney(items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0))}</td>
-                  <td colSpan="3"></td>
                 </tr>
               )}
             </tbody>
@@ -462,7 +475,7 @@ export default function OutwardDetail() {
             </h3>
             <p className="mt-1 text-sm text-gray-500">
               {decision === "approve"
-                ? "The cost details will be marked approved and the entry goes to the warehouse manager for dispatch."
+                ? "The payment details will be marked approved and the entry goes to the warehouse manager for dispatch."
                 : "It goes back to Sales, who can fix the details and send it again."}
             </p>
             <label className="mt-4 mb-1.5 block text-xs font-medium text-gray-500">

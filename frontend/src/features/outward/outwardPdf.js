@@ -19,6 +19,13 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
     ["Customer", outward.customerName || "-"],
     ["Company", outward.companyName || outward.warehouse?.company?.name || "-"],
     ["Outward Type", outward.outwardType || "-"],
+    ...(includeCost
+      ? [
+          ["PI No.", outward.piNumber || "-"],
+          ["PI Date", outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"],
+          ["PI Amount", outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")],
+        ]
+      : []),
     ...(includeDispatch
       ? [
           ["Dispatch Mode", outward.dispatchMode || "-"],
@@ -52,18 +59,16 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
   }
 
   doc.subheading("Items");
-  const money = (v) => (v === null || v === undefined || v === "" ? "-" : Number(v).toLocaleString("en-IN"));
   const costLabel = { COMPLETED: "Completed", PARTIALLY_COMPLETED: "Partially completed", PENDING: "Pending" };
   doc.table({
     columns: includeCost
       ? [
           { header: "#", width: 30 },
-          { header: "Category", width: 105 },
-          { header: "SKU / Model", width: 125 },
-          { header: "Qty", width: 40 },
-          { header: "UOM", width: 45 },
-          { header: "Cost", width: 65 },
-          { header: "Cost status", width: 105 },
+          { header: "Category", width: 130 },
+          { header: "SKU / Model", width: 160 },
+          { header: "Qty", width: 50 },
+          { header: "UOM", width: 55 },
+          { header: "Payment status", width: 90 },
         ]
       : [
           { header: "#", width: 30 },
@@ -78,7 +83,7 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
       item.sku || "-",
       String(item.quantity || 0),
       item.uom || "-",
-      ...(includeCost ? [money(item.cost), costLabel[item.costStatus] || "-"] : []),
+      ...(includeCost ? [costLabel[item.paymentStatus] || "-"] : []),
     ]),
   });
 

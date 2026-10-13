@@ -207,6 +207,13 @@ model Min {
   customerName String
   companyName  String?
 
+  piNumber   String?
+  piDate     DateTime?
+  piAmount   Decimal?  @db.Decimal(14, 2)
+  piFileKey  String?   // Supabase key of the uploaded PI file
+  piFileName String?
+  piFileType String?
+
   refDocType     String
   refDocNumber   String
   refDocDate     DateTime
@@ -247,21 +254,22 @@ model Min {
 model MinItem {
   id String @id @default(uuid())
 
-  minId      String
-  category   String
+  minId       String
+  category    String
   companyName String?
-  sku        String
-  quantity   Int
-  uom        String
+  sku         String
+  quantity    Int
+  uom         String
 
   min Min @relation(fields: [minId], references: [id], onDelete: Cascade)
-  cost           Decimal?    @db.Decimal(14, 2)
-  costStatus     CostStatus?
-  utrNumber      String?
-  proofFileKey   String?     // Supabase key of the uploaded UTR image / file
-  proofFileName  String?
-  proofFileType  String?
 
+  // REMOVED: cost Decimal? @db.Decimal(14, 2)
+  // RENAMED: costStatus -> paymentStatus (same database column + same enum, so no data is lost)
+  paymentStatus CostStatus? @map("costStatus")
+  utrNumber     String?
+  proofFileKey  String?     // Supabase key of the uploaded UTR image / file
+  proofFileName String?
+  proofFileType String?
 
   @@index([minId])
   @@index([category, companyName])

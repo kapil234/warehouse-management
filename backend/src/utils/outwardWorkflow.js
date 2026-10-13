@@ -9,7 +9,7 @@ import prisma from "../config/prisma.js";
  *   ACCOUNT --approve--> PENDING_DISPATCH
  *   ACCOUNT --reject-->  REJECTED  (allowed until dispatch; Sales edits + resubmits,
  *                                    or Account approves it again directly)
- *   SALES   --edit-->    allowed until dispatch. Changing cost or item details
+ *   SALES   --edit-->    allowed until dispatch. Changing PI / payment or item details
  *                        sends the entry back to PENDING_APPROVAL; changing only
  *                        header fields (customer, type ...) keeps PENDING_DISPATCH.
  *   WAREHOUSE_MANAGER --dispatch (details + documents)--> DISPATCHED
@@ -18,7 +18,7 @@ import prisma from "../config/prisma.js";
  * Dispatch documents are visible to Sales / Account only once DISPATCHED.
  * After DISPATCHED Sales / Account are locked out; the WAREHOUSE_MANAGER can still update the dispatch
  * details (reference documents, mode, vehicle no., remarks) and add / delete documents.
- * SUPER_ADMIN changes everything through Update (items, cost, dispatch details).
+ * SUPER_ADMIN changes everything through Update (PI details, items, payment, dispatch details).
  * SUPER_ADMIN can change everything.
  * =========================================================
  */
@@ -30,7 +30,7 @@ export const STATUS = {
   REJECTED: "REJECTED",
 };
 
-export const COST_STATUSES = ["COMPLETED", "PARTIALLY_COMPLETED", "PENDING"];
+export const PAYMENT_STATUSES = ["COMPLETED", "PARTIALLY_COMPLETED", "PENDING"];
 
 // Statuses the warehouse manager is allowed to see at all.
 export const WAREHOUSE_VISIBLE_STATUSES = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED];
@@ -41,8 +41,9 @@ export const REJECTABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.PENDING_DISP
 // Account can approve a pending entry, or change its mind and approve a rejected one.
 export const APPROVABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED];
 
-// Audit-log actions the warehouse manager must NOT see (cost / approval side).
-export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED"];
+// Audit-log actions the warehouse manager must NOT see (PI / payment / approval side).
+// COST_UPDATED is kept so older history rows stay hidden.
+export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED", "PAYMENT_UPDATED", "PI_UPDATED"];
 
 export const isFinanceSide = (role) => role === "SALES" || role === "ACCOUNT";
 
@@ -71,12 +72,16 @@ export async function getFinanceWarehouseIds(user) {
 
 /**
  * Removes everything the warehouse manager must not see from an outward
- * entry: cost, cost status, UTR, proof, approval info, workflow status.
+ * entry: PI details, payment status, UTR, proof, approval info, workflow status.
  * Items keep only category / model (sku) / quantity / uom.
  */
 export function sanitizeForWarehouse(entry) {
   if (!entry) return entry;
-  const { approvedById, approvedByName, approvedAt, approvalRemarks, status, ...rest } = entry;
+  const {
+    approvedById, approvedByName, approvedAt, approvalRemarks, status,
+    piNumber, piDate, piAmount, piFileKey, piFileName, piFileType,
+    ...rest
+  } = entry;
   return {
     ...rest,
     dispatchState: status === STATUS.DISPATCHED ? "Dispatched" : "Pending",
@@ -96,29 +101,55 @@ export function shapeItemForFinance(i) {
   const { proofFileKey, ...rest } = i;
   return {
     ...rest,
-    cost: i.cost === null || i.cost === undefined ? null : Number(i.cost),
     hasProof: Boolean(proofFileKey),
   };
 }
 
 export function shapeForFinance(entry) {
   if (!entry) return entry;
-  return { ...entry, items: (entry.items || []).map(shapeItemForFinance) };
+  const { piFileKey, ...rest } = entry;
+  return {
+    ...rest,
+    piAmount: entry.piAmount === null || entry.piAmount === undefined ? null : Number(entry.piAmount),
+    hasPiFile: Boolean(piFileKey),
+    items: (entry.items || []).map(shapeItemForFinance),
+  };
 }
 
-/** Returns an error message, or null when the item's cost fields are valid. */
-export function validateItemCost(item, label) {
-  const cost = item.cost === "" || item.cost === null || item.cost === undefined ? NaN : Number(item.cost);
-  if (!Number.isFinite(cost) || cost < 0) return `${label}: cost is required and must be 0 or more`;
-  if (!COST_STATUSES.includes(item.costStatus)) {
-    return `${label}: cost status must be Completed, Partially Completed or Pending`;
+/** Returns an error message, or null when the PI (proforma invoice) fields are valid. */
+export function validatePi(data) {
+  if (!String(data.piNumber || "").trim()) return "PI number is required";
+  if (!data.piDate || Number.isNaN(new Date(data.piDate).getTime())) return "PI date is required";
+  const amount = data.piAmount === "" || data.piAmount === null || data.piAmount === undefined ? NaN : Number(data.piAmount);
+  if (!Number.isFinite(amount) || amount < 0) return "PI amount is required and must be 0 or more";
+  if (data.piFileKey && !/^(min|uploads)\//.test(String(data.piFileKey))) return "Invalid PI file";
+  return null;
+}
+
+/** PI columns as stored in Min. `previous` = the saved entry (to keep its PI file on edit). */
+export function toPiColumns(data, previous) {
+  const keep = data.keepPiFile === true && previous?.piFileKey && !data.piFileKey;
+  return {
+    piNumber: String(data.piNumber).trim(),
+    piDate: new Date(data.piDate),
+    piAmount: Number(data.piAmount),
+    piFileKey: keep ? previous.piFileKey : data.piFileKey || null,
+    piFileName: keep ? previous.piFileName : data.piFileKey ? data.piFileName || null : null,
+    piFileType: keep ? previous.piFileType : data.piFileKey ? data.piFileType || null : null,
+  };
+}
+
+/** Returns an error message, or null when the item's payment fields are valid. */
+export function validateItemPayment(item, label) {
+  if (!PAYMENT_STATUSES.includes(item.paymentStatus)) {
+    return `${label}: payment status must be Completed, Partially Completed or Pending`;
   }
-  if (item.costStatus !== "PENDING") {
+  if (item.paymentStatus !== "PENDING") {
     const hasUtr = Boolean(String(item.utrNumber || "").trim());
     const hasProof = Boolean(item.proofFileKey) || item.keepProof === true;
     if (!hasUtr && !hasProof) {
-      return `${label}: UTR number or a payment proof (image / file) is required when cost status is ${
-        item.costStatus === "COMPLETED" ? "Completed" : "Partially Completed"
+      return `${label}: UTR number or a payment proof (image / file) is required when payment status is ${
+        item.paymentStatus === "COMPLETED" ? "Completed" : "Partially Completed"
       }`;
     }
   }
@@ -130,7 +161,7 @@ export function validateItemCost(item, label) {
 
 /** Item row as stored in MinItem. `previous` = the row being replaced on edit (to keep its proof). */
 export function toItemRow(item, previous) {
-  const paid = item.costStatus !== "PENDING";
+  const paid = item.paymentStatus !== "PENDING";
   const keep = paid && item.keepProof === true && previous?.proofFileKey;
   return {
     category: item.category,
@@ -138,8 +169,7 @@ export function toItemRow(item, previous) {
     sku: String(item.sku).trim(),
     quantity: Number(item.quantity),
     uom: item.uom,
-    cost: Number(item.cost),
-    costStatus: item.costStatus,
+    paymentStatus: item.paymentStatus,
     utrNumber: paid ? String(item.utrNumber || "").trim() || null : null,
     proofFileKey: paid ? (keep ? previous.proofFileKey : item.proofFileKey || null) : null,
     proofFileName: paid ? (keep ? previous.proofFileName : item.proofFileName || null) : null,
@@ -149,7 +179,7 @@ export function toItemRow(item, previous) {
 
 /**
  * Fingerprint of everything Account approves: item identity, quantity, UOM and
- * all cost fields. If it changes on an already-approved entry, approval is needed again.
+ * all payment fields. If it changes on an already-approved entry, approval is needed again.
  */
 export function itemsFingerprint(items = []) {
   return JSON.stringify(
@@ -160,8 +190,7 @@ export function itemsFingerprint(items = []) {
         String(i.sku || "").trim().toLowerCase(),
         Number(i.quantity),
         String(i.uom || "").toLowerCase(),
-        Number(i.cost ?? 0),
-        i.costStatus || null,
+        i.paymentStatus || null,
         i.utrNumber || null,
         Boolean(i.proofFileKey),
       ])
@@ -181,9 +210,35 @@ export function itemsFingerprint(items = []) {
 export const outwardFolder = (outwardNumber) => `min/${String(outwardNumber).replace(/[^a-zA-Z0-9._-]/g, "_")}/`;
 export const tempProofFolder = (minId) => `uploads/${String(minId).toLowerCase()}/`;
 
-/** A proof key must sit in this entry's own folder (final or temporary) - never in someone else's. */
-export function proofKeyProblem(items = [], minId, outwardNumber) {
+/** A proof / PI file key must sit in this entry's own folder (final or temporary) - never in someone else's. */
+export function proofKeyProblem(items = [], minId, outwardNumber, piFileKey) {
   const allowed = [tempProofFolder(minId), ...(outwardNumber ? [outwardFolder(outwardNumber)] : [])];
-  const bad = items.find((i) => i.proofFileKey && !allowed.some((f) => String(i.proofFileKey).startsWith(f)));
-  return bad ? "A payment proof does not belong to this entry. Please remove it and attach the file again." : null;
+  const inFolder = (key) => allowed.some((f) => String(key).startsWith(f));
+  const bad = items.find((i) => i.proofFileKey && !inFolder(i.proofFileKey));
+  if (bad) return "A payment proof does not belong to this entry. Please remove it and attach the file again.";
+  if (piFileKey && !inFolder(piFileKey)) return "The PI file does not belong to this entry. Please remove it and attach the file again.";
+  return null;
 }
+
+
+/**
+ * Who owns which reference document / document.
+ *
+ *   ACCOUNT            Invoice, E-way Bill, Other (Accounts)          (documents: Invoice, E-way bill, Accounts other - <name>)
+ *   WAREHOUSE_MANAGER  Delivery Challan, Return Note, Other           (documents: Delivery challan, Dispatch photo, ...)
+ *
+ * Ownership is decided by the type / category name, so no extra database column is needed.
+ * Each side only ever replaces its own rows, so Account and the warehouse never overwrite each other.
+ */
+export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "Other (Accounts)"]; // "E-way Bill" kept so older rows stay account-owned
+export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
+
+export const canonicalAccountRefType = (type) =>
+  ["Invoice", "Other (Accounts)"].find((t) => t.toLowerCase() === String(type || "").trim().toLowerCase()) || null;
+export const isAccountRefType = (type) => Boolean(canonicalAccountRefType(type));
+
+export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|accounts other)/i.test(String(category || "").trim());
+
+// Account can add / replace / delete its own reference documents and files until the entry is dispatched.
+export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.PENDING_DISPATCH];
