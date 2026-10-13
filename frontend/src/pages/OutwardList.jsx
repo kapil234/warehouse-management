@@ -580,7 +580,7 @@ export default function Outward() {
               <table className="w-full min-w-[900px] text-left">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">DC No.</th>
+                    <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">w-id</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Outward type</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Customer</th>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Quantity</th>
