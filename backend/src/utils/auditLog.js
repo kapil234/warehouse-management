@@ -96,6 +96,12 @@ const FIELD_LABELS = {
   piNumber: "PI number",
   piDate: "PI date",
   piAmount: "PI amount",
+  shipToContactPerson: "Ship to contact person",
+  shipToContactNo: "Ship to contact no.",
+  shipToLocation: "Ship to location",
+  billToContactPerson: "Bill to contact person",
+  billToContactNo: "Bill to contact no.",
+  billToEmail: "Bill to email",
 };
 
 /**

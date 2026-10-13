@@ -624,7 +624,7 @@ export async function updateGrn(req, res) {
     }
  
     if (!data.inwardType || !data.supplierName?.trim() || !data.companyName?.trim()) {
-      return res.status(422).json({ message: "Inward type, supplier/customer and company name are required." });
+      return res.status(422).json({ message: "Inward type, supplier and company name are required." });
     }
     if (!data.companyId || data.companyId !== warehouse.companyId) {
       return res.status(400).json({ message: "Selected company does not match this warehouse." });

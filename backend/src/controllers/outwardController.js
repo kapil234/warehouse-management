@@ -11,6 +11,9 @@ import {
   SALES_EDITABLE_STATUSES,
   REJECTABLE_STATUSES,
   APPROVABLE_STATUSES,
+  HOLDABLE_STATUSES,
+  ewayBillProblem,
+  EWAY_BILL_THRESHOLD,
   itemsFingerprint,
   WAREHOUSE_VISIBLE_STATUSES,
   HIDDEN_FROM_WAREHOUSE_ACTIONS,
@@ -20,7 +23,9 @@ import {
   shapeForFinance,
   validateItemPayment,
   validatePi,
+  validateParty,
   toPiColumns,
+  toPartyColumns,
   toItemRow,
   proofKeyProblem,
   ACCOUNT_REF_TYPES,
@@ -378,6 +383,8 @@ function validateSalesPayload(data, items) {
   if (!data.companyName?.trim()) return "companyName is required";
   const piError = validatePi(data);
   if (piError) return piError;
+  const partyError = validateParty(data);
+  if (partyError) return partyError;
   if (!items.length) return "At least one item is required";
   for (const [index, item] of items.entries()) {
     const label = `Item ${index + 1}`;
@@ -391,7 +398,7 @@ function validateSalesPayload(data, items) {
 }
 
 // Only quantity-level facts go into audit rows that the warehouse can read.
-const paymentFingerprint = (i) => JSON.stringify([i.paymentStatus || null, i.utrNumber || null, Boolean(i.proofFileKey)]);
+const paymentFingerprint = (i) => JSON.stringify([i.paymentStatus || null, i.utrNumber || null, i.approvedBy || null, Boolean(i.proofFileKey)]);
 const itemMatchKey = (i) => [i.category, i.sku, i.uom].join("::").toLowerCase();
 
 
@@ -477,6 +484,7 @@ export async function createOutward(req, res) {
               customerName: data.customerName.trim(),
               companyName: data.companyName.trim(),
               ...toPiColumns(data),
+              ...toPartyColumns(data),
               refDocType: PLACEHOLDER,
               refDocNumber: PLACEHOLDER,
               refDocDate: data.outwardDateTime ? new Date(data.outwardDateTime) : new Date(),
@@ -536,6 +544,8 @@ export async function updateOutward(req, res) {
         id: true, warehouseId: true, outwardNumber: true, status: true, createdById: true,
         outwardType: true, customerName: true, companyName: true,
         piNumber: true, piDate: true, piAmount: true, piFileKey: true, piFileName: true, piFileType: true,
+        shipToContactPerson: true, shipToContactNo: true, shipToLocation: true,
+        billToContactPerson: true, billToContactNo: true, billToEmail: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
         dispatchMode: true, vehicleNumber: true, remarks: true,
         items: true,
@@ -575,6 +585,7 @@ export async function updateOutward(req, res) {
     const problem = validateSalesPayload(data, normalized);
     if (problem) return res.status(422).json({ message: problem });
     const piColumns = toPiColumns(data, existing);
+    const partyColumns = toPartyColumns(data);
 
     const unknownItems = await findUnknownProducts(normalized, existing.items);
     if (unknownItems.length) return res.status(422).json({ message: unknownProductsMessage(unknownItems) });
@@ -592,6 +603,7 @@ export async function updateOutward(req, res) {
           refDocType: String(r.refDocType || "Other").trim(),
           refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
           ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
+          vehicleNumber: r.vehicleNumber ? String(r.vehicleNumber).trim() : null,
         }));
       if (!refs.length) return res.status(422).json({ message: "At least one reference document is required" });
       dispatchUpdate = {
@@ -619,6 +631,10 @@ export async function updateOutward(req, res) {
       { piNumber: piColumns.piNumber, piDate: isoDay(piColumns.piDate), piAmount: piColumns.piAmount },
       ["piNumber", "piDate", "piAmount"]
     );
+    const partyChanges = diffFields(existing, partyColumns, [
+      "shipToContactPerson", "shipToContactNo", "shipToLocation",
+      "billToContactPerson", "billToContactNo", "billToEmail",
+    ]);
     const piFileChanged = (existing.piFileKey || null) !== (piColumns.piFileKey || null);
     const itemChanges = diffItems(existing.items, newItems);
 
@@ -640,9 +656,10 @@ export async function updateOutward(req, res) {
       }
       const wasRejected = current.status === STATUS.REJECTED;
       const wasApproved = current.status === STATUS.PENDING_DISPATCH;
+      const wasOnHold = current.status === STATUS.ON_HOLD;
       // ANY update (Sales or super admin) on an approved, not-yet-dispatched entry sends it back for
       // approval again. A dispatched entry edited by the super admin keeps its status.
-      const resubmit = current.status === STATUS.PENDING_APPROVAL || wasRejected || wasApproved;
+      const resubmit = current.status === STATUS.PENDING_APPROVAL || wasRejected || wasApproved || wasOnHold;
       sentForApproval = resubmit;
 
       const stock = await getWarehouseStock(tx, existing.warehouseId, { excludeOutwardId: id, onlyItems: [...newItems, ...existing.items] });
@@ -656,6 +673,7 @@ export async function updateOutward(req, res) {
           customerName: data.customerName.trim(),
           companyName: data.companyName.trim(),
           ...piColumns,
+          ...partyColumns,
           ...(data.outwardDateTime ? { refDocDate: new Date(data.outwardDateTime) } : {}),
           ...(dispatchUpdate ? dispatchUpdate.snapshot : {}),
           ...(resubmit
@@ -692,9 +710,13 @@ export async function updateOutward(req, res) {
       for (const change of piChanges) {
         entries.push({ ...base, action: "PI_UPDATED", description: `${change.label} updated from "${change.oldValue ?? "—"}" to "${change.newValue ?? "—"}"`, changes: change });
       }
+      for (const change of partyChanges) {
+        entries.push({ ...base, action: "PARTY_UPDATED", description: `${change.label} updated from "${change.oldValue ?? "—"}" to "${change.newValue ?? "—"}"`, changes: change });
+      }
       if (piFileChanged) entries.push({ ...base, action: "PI_UPDATED", description: piColumns.piFileKey ? "PI file attached / replaced" : "PI file removed" });
       if (paymentChanged) entries.push({ ...base, action: "PAYMENT_UPDATED", description: "Payment details updated" });
       if (wasRejected) entries.push({ ...base, action: "RESUBMITTED", description: "Resubmitted for account approval" });
+      else if (wasOnHold) entries.push({ ...base, action: "RESUBMITTED", description: "Updated while on hold - sent for account approval again" });
       else if (wasApproved) entries.push({ ...base, action: "RESUBMITTED", description: "Updated after approval - sent for account approval again" });
       if (!entries.length) entries.push({ ...base, action: "UPDATED", description: "Outward entry saved with no field changes" });
       await recordAuditLogs(tx, entries);
@@ -734,7 +756,7 @@ export async function updateOutward(req, res) {
 async function loadForDecision(req, allowedStatuses, notAllowedMessage) {
   const min = await prisma.min.findUnique({
     where: { id: req.params.id },
-    select: { id: true, outwardNumber: true, warehouseId: true, status: true, createdById: true },
+    select: { id: true, outwardNumber: true, warehouseId: true, status: true, createdById: true, piAmount: true },
   });
   if (!min) throw httpError(404, "Outward entry not found");
   await assertEntryVisible(req, min);
@@ -746,6 +768,16 @@ export async function approveOutward(req, res) {
   try {
     const min = await loadForDecision(req, APPROVABLE_STATUSES, "This entry is not waiting for approval");
     const remarks = req.body?.remarks?.trim() || null;
+
+    // Above Rs. 1,00,000 an e-way bill (number or document) must be on the entry before it is approved.
+    if (Number(min.piAmount) > EWAY_BILL_THRESHOLD) {
+      const [referenceDocuments, documents] = await Promise.all([
+        prisma.minReferenceDocument.findMany({ where: { minId: min.id }, select: { refDocType: true, refDocNumber: true, ewayBillNumber: true } }),
+        prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, select: { docCategory: true } }),
+      ]);
+      const problem = ewayBillProblem({ piAmount: min.piAmount, referenceDocuments, documents });
+      if (problem) return res.status(422).json({ message: problem });
+    }
 
     // Guard against a double click / two approvers: only flips if it is still pending.
     const { count } = await prisma.min.updateMany({
@@ -769,6 +801,38 @@ export async function approveOutward(req, res) {
   } catch (error) {
     console.error("Approve outward error:", error);
     return res.status(error.status || 500).json({ message: error.message || "Failed to approve" });
+  }
+}
+
+// HOLD: Account parks the entry with a reason. Stock stays reserved; Account can approve / reject it later,
+// Sales can edit it (which sends it back for approval). The warehouse manager never sees it.
+export async function holdOutward(req, res) {
+  try {
+    const min = await loadForDecision(req, HOLDABLE_STATUSES, "This entry can no longer be put on hold (already dispatched, rejected or on hold)");
+    const remarks = req.body?.remarks?.trim();
+    if (!remarks) return res.status(422).json({ message: "Please give a reason for putting this on hold" });
+
+    const { count } = await prisma.min.updateMany({
+      where: { id: min.id, status: { in: HOLDABLE_STATUSES } },
+      data: {
+        status: STATUS.ON_HOLD,
+        approvedById: req.user.id,
+        approvedByName: req.user.name,
+        approvedAt: new Date(),
+        approvalRemarks: remarks,
+      },
+    });
+    if (!count) return res.status(409).json({ message: "This entry was just updated by someone else" });
+
+    await recordAuditLog(prisma, {
+      entityType: "OUTWARD", entityId: min.id, entityNumber: min.outwardNumber,
+      action: "ON_HOLD", description: `Put on hold by ${req.user.name} — ${remarks}`,
+      userId: req.user.id, warehouseId: min.warehouseId,
+    });
+    return res.json({ message: "Put on hold. You can approve or reject it later." });
+  } catch (error) {
+    console.error("Hold outward error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to put on hold" });
   }
 }
 
@@ -943,7 +1007,7 @@ export async function dispatchOutward(req, res) {
 
 // ---------------------------------------------------------------------------
 // ACCOUNT DOCUMENTS  (Account, Super admin) - until the entry is dispatched
-// Account's own reference documents (Invoice / E-way Bill / Other) and files (invoice, e-way bill, other).
+// Account's own reference documents (Invoice / E-way Bill / DC Challan / Other) and files (invoice, e-way bill, other).
 // Only the account-owned reference rows are replaced; the warehouse manager's rows stay as they are.
 // Same request shape as dispatch: JSON, or multipart (payload + files + categories).
 // ---------------------------------------------------------------------------
@@ -971,12 +1035,14 @@ export async function saveAccountDocuments(req, res) {
     for (const r of rawRefs) {
       if (!r || !(String(r.refDocNumber || "").trim() || String(r.ewayBillNumber || "").trim())) continue;
       const type = canonicalAccountRefType(r.refDocType);
-      if (!type) return res.status(422).json({ message: "Account reference documents can only be Invoice, E-way Bill or Other" });
+      if (!type) return res.status(422).json({ message: "Account reference documents can only be Invoice, E-way Bill, DC Challan or Other" });
       const eway = String(r.ewayBillNumber || "").trim();
       refs.push({
         refDocType: type,
         refDocNumber: String(r.refDocNumber || "").trim() || eway,
         ewayBillNumber: eway || null,
+        // Only a DC Challan carries a vehicle number.
+        vehicleNumber: type === "DC Challan" ? String(r.vehicleNumber || "").trim() || null : null,
       });
     }
 

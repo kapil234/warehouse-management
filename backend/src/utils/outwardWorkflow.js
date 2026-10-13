@@ -9,6 +9,9 @@ import prisma from "../config/prisma.js";
  *   ACCOUNT --approve--> PENDING_DISPATCH
  *   ACCOUNT --reject-->  REJECTED  (allowed until dispatch; Sales edits + resubmits,
  *                                    or Account approves it again directly)
+ *   ACCOUNT --hold-->    ON_HOLD   (allowed until dispatch, with a reason; stock stays reserved.
+ *                                    Account can approve / reject it later, Sales can edit + resubmit.
+ *                                    The warehouse manager never sees it.)
  *   SALES   --edit-->    allowed until dispatch. Changing PI / payment or item details
  *                        sends the entry back to PENDING_APPROVAL; changing only
  *                        header fields (customer, type ...) keeps PENDING_DISPATCH.
@@ -28,6 +31,7 @@ export const STATUS = {
   PENDING_DISPATCH: "PENDING_DISPATCH",
   DISPATCHED: "DISPATCHED",
   REJECTED: "REJECTED",
+  ON_HOLD: "ON_HOLD",
 };
 
 export const PAYMENT_STATUSES = ["COMPLETED", "PARTIALLY_COMPLETED", "PENDING"];
@@ -36,14 +40,16 @@ export const PAYMENT_STATUSES = ["COMPLETED", "PARTIALLY_COMPLETED", "PENDING"];
 export const WAREHOUSE_VISIBLE_STATUSES = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED];
 
 // Sales may edit until dispatch; Account may reject until dispatch.
-export const SALES_EDITABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.PENDING_DISPATCH];
-export const REJECTABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.PENDING_DISPATCH];
-// Account can approve a pending entry, or change its mind and approve a rejected one.
-export const APPROVABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED];
+export const SALES_EDITABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
+export const REJECTABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
+// Account can put a pending / approved entry on hold until it is dispatched.
+export const HOLDABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.PENDING_DISPATCH];
+// Account can approve a pending entry, or change its mind and approve a rejected / held one.
+export const APPROVABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD];
 
 // Audit-log actions the warehouse manager must NOT see (PI / payment / approval side).
 // COST_UPDATED is kept so older history rows stay hidden.
-export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED", "PAYMENT_UPDATED", "PI_UPDATED"];
+export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED", "PAYMENT_UPDATED", "PI_UPDATED", "PARTY_UPDATED", "ON_HOLD"];
 
 export const isFinanceSide = (role) => role === "SALES" || role === "ACCOUNT";
 
@@ -80,6 +86,8 @@ export function sanitizeForWarehouse(entry) {
   const {
     approvedById, approvedByName, approvedAt, approvalRemarks, status,
     piNumber, piDate, piAmount, piFileKey, piFileName, piFileType,
+    shipToContactPerson, shipToContactNo, shipToLocation,
+    billToContactPerson, billToContactNo, billToEmail,
     ...rest
   } = entry;
   return {
@@ -126,6 +134,30 @@ export function validatePi(data) {
   return null;
 }
 
+/** Returns an error message, or null when the Ship to / Bill to details are valid (all optional). */
+export function validateParty(data) {
+  const email = String(data.billToEmail || "").trim();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Bill to email is not a valid email address";
+  for (const [key, label] of [["shipToContactNo", "Ship to contact no."], ["billToContactNo", "Bill to contact no."]]) {
+    const v = String(data[key] || "").trim();
+    if (v && !/^[0-9+()\-\s]{6,20}$/.test(v)) return `${label} is not valid`;
+  }
+  return null;
+}
+
+/** Ship to / Bill to columns as stored in Min. */
+export function toPartyColumns(data) {
+  const t = (v) => (String(v ?? "").trim() || null);
+  return {
+    shipToContactPerson: t(data.shipToContactPerson),
+    shipToContactNo: t(data.shipToContactNo),
+    shipToLocation: t(data.shipToLocation),
+    billToContactPerson: t(data.billToContactPerson),
+    billToContactNo: t(data.billToContactNo),
+    billToEmail: t(data.billToEmail),
+  };
+}
+
 /** PI columns as stored in Min. `previous` = the saved entry (to keep its PI file on edit). */
 export function toPiColumns(data, previous) {
   const keep = data.keepPiFile === true && previous?.piFileKey && !data.piFileKey;
@@ -143,6 +175,10 @@ export function toPiColumns(data, previous) {
 export function validateItemPayment(item, label) {
   if (!PAYMENT_STATUSES.includes(item.paymentStatus)) {
     return `${label}: payment status must be Completed, Partially Completed or Pending`;
+  }
+  // Approve By is needed while the payment is still Pending / Partially completed.
+  if (item.paymentStatus !== "COMPLETED" && !String(item.approvedBy || "").trim()) {
+    return `${label}: Approve By is required when payment status is ${item.paymentStatus === "PENDING" ? "Pending" : "Partially Completed"}`;
   }
   if (item.paymentStatus !== "PENDING") {
     const hasUtr = Boolean(String(item.utrNumber || "").trim());
@@ -171,6 +207,7 @@ export function toItemRow(item, previous) {
     uom: item.uom,
     paymentStatus: item.paymentStatus,
     utrNumber: paid ? String(item.utrNumber || "").trim() || null : null,
+    approvedBy: item.paymentStatus !== "COMPLETED" ? String(item.approvedBy || "").trim() || null : null,
     proofFileKey: paid ? (keep ? previous.proofFileKey : item.proofFileKey || null) : null,
     proofFileName: paid ? (keep ? previous.proofFileName : item.proofFileName || null) : null,
     proofFileType: paid ? (keep ? previous.proofFileType : item.proofFileType || null) : null,
@@ -192,6 +229,7 @@ export function itemsFingerprint(items = []) {
         String(i.uom || "").toLowerCase(),
         i.paymentStatus || null,
         i.utrNumber || null,
+        i.approvedBy || null,
         Boolean(i.proofFileKey),
       ])
       .map((row) => JSON.stringify(row))
@@ -230,15 +268,32 @@ export function proofKeyProblem(items = [], minId, outwardNumber, piFileKey) {
  * Ownership is decided by the type / category name, so no extra database column is needed.
  * Each side only ever replaces its own rows, so Account and the warehouse never overwrite each other.
  */
-export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "Other (Accounts)"]; // "E-way Bill" kept so older rows stay account-owned
+export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"]; // shown to the user as Invoice / E-way Bill / DC Challan / Other
 export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
 
 export const canonicalAccountRefType = (type) =>
-  ["Invoice", "Other (Accounts)"].find((t) => t.toLowerCase() === String(type || "").trim().toLowerCase()) || null;
+  ACCOUNT_REF_TYPES.find((t) => t.toLowerCase() === String(type || "").trim().toLowerCase()) || null;
 export const isAccountRefType = (type) => Boolean(canonicalAccountRefType(type));
 
 export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
-export const isAccountDocCategory = (category) => /^(invoice|e-?way|accounts other)/i.test(String(category || "").trim());
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|accounts other)/i.test(String(category || "").trim());
 
 // Account can add / replace / delete its own reference documents and files until the entry is dispatched.
-export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.PENDING_DISPATCH];
+export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
+
+/**
+ * Above this PI amount (Rs.) an e-way bill is needed: either an e-way bill number
+ * (an "E-way Bill" reference with its number) or the e-way bill document itself.
+ */
+export const EWAY_BILL_THRESHOLD = 100000;
+
+export function ewayBillProblem({ piAmount, referenceDocuments = [], documents = [] }) {
+  if (!(Number(piAmount) > EWAY_BILL_THRESHOLD)) return null;
+  const hasNumber = referenceDocuments.some(
+    (r) => (/e-?way/i.test(String(r.refDocType || "")) && String(r.refDocNumber || "").trim()) || String(r.ewayBillNumber || "").trim()
+  );
+  const hasDocument = documents.some((d) => /^e-?way/i.test(String(d.docCategory || "").trim()));
+  return hasNumber || hasDocument
+    ? null
+    : "The PI amount is above Rs. 1,00,000: add the e-way bill number (reference type E-way Bill) or upload the e-way bill document before approving.";
+}

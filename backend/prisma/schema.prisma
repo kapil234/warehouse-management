@@ -20,6 +20,7 @@ enum OutwardStatus {
   PENDING_DISPATCH   // approved by Account, waiting for the Warehouse manager
   DISPATCHED         // Warehouse manager filled dispatch details
   REJECTED           // Account rejected it; Sales can edit + resubmit
+  ON_HOLD            // Account put it on hold (reason given); Account can approve / reject later, Sales can edit + resubmit
 }
 
 enum CostStatus {
@@ -214,6 +215,16 @@ model Min {
   piFileName String?
   piFileType String?
 
+  // Ship to details (entered by Sales, after the PI row)
+  shipToContactPerson String?
+  shipToContactNo     String?
+  shipToLocation      String?
+
+  // Bill to details (entered by Sales)
+  billToContactPerson String?
+  billToContactNo     String?
+  billToEmail         String?
+
   refDocType     String
   refDocNumber   String
   refDocDate     DateTime
@@ -267,6 +278,7 @@ model MinItem {
   // RENAMED: costStatus -> paymentStatus (same database column + same enum, so no data is lost)
   paymentStatus CostStatus? @map("costStatus")
   utrNumber     String?
+  approvedBy    String?     // "Approve By" - used while payment status is Pending / Partially completed
   proofFileKey  String?     // Supabase key of the uploaded UTR image / file
   proofFileName String?
   proofFileType String?
@@ -283,6 +295,7 @@ model MinReferenceDocument {
   refDocType     String
   refDocNumber   String?
   ewayBillNumber String?
+  vehicleNumber  String?   // vehicle no. of a DC Challan reference (Account)
   createdAt      DateTime @default(now())
 
   min Min @relation(fields: [minId], references: [id], onDelete: Cascade)

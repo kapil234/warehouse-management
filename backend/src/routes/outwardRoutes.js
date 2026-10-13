@@ -6,6 +6,7 @@ import {
   updateOutward,
   approveOutward,
   rejectOutward,
+  holdOutward,
   dispatchOutward,
   saveAccountDocuments,
   downloadItemProof,
@@ -26,7 +27,7 @@ import { upload } from "../middleware/uploadMiddleware.js";
  * Outward workflow
  *
  *   SALES              creates / edits (PI details + payment status, UTR / proof)  -> PENDING_APPROVAL
- *   ACCOUNT            approves or rejects the entry         -> PENDING_DISPATCH / REJECTED
+ *   ACCOUNT            approves, holds or rejects the entry  -> PENDING_DISPATCH / ON_HOLD / REJECTED
  *   ACCOUNT            also adds invoice / e-way bill / other reference documents + files (before dispatch)
  *   WAREHOUSE_MANAGER  fills the dispatch details            -> DISPATCHED
  *   SUPER_ADMIN        can do every step
@@ -59,6 +60,7 @@ router.put("/:id", authorize("SUPER_ADMIN", "SALES"), updateOutward);
 // Account decision on the PI / payment details.
 router.post("/:id/approve", authorize("SUPER_ADMIN", "ACCOUNT"), approveOutward);
 router.post("/:id/reject", authorize("SUPER_ADMIN", "ACCOUNT"), rejectOutward);
+router.post("/:id/hold", authorize("SUPER_ADMIN", "ACCOUNT"), holdOutward);
 
 // Warehouse manager fills vehicle / dispatch details.
 // Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.
