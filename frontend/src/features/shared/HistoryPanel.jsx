@@ -17,6 +17,7 @@ const ACTION_STYLES = {
   RESUBMITTED: "bg-amber-100 text-amber-700",
   APPROVED: "bg-green-100 text-green-700",
   REJECTED: "bg-red-100 text-red-700",
+  ON_HOLD: "bg-purple-100 text-purple-700",
   COST_UPDATED: "bg-blue-100 text-blue-700",
   DISPATCHED: "bg-green-100 text-green-700",
 };
@@ -34,6 +35,7 @@ const ACTION_LABELS = {
   RESUBMITTED: "Resubmitted",
   APPROVED: "Approved",
   REJECTED: "Rejected",
+  ON_HOLD: "On hold",
   COST_UPDATED: "Cost updated",
   DISPATCHED: "Dispatched",
 };

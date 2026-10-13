@@ -232,6 +232,18 @@ export const approveOutward = createAsyncThunk(
   }
 );
 
+export const holdOutward = createAsyncThunk(
+  "outward/hold",
+  async ({ id, remarks }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.post(`/api/outward/${id}/hold`, { remarks });
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to put on hold");
+    }
+  }
+);
+
 export const rejectOutward = createAsyncThunk(
   "outward/reject",
   async ({ id, remarks }, { rejectWithValue }) => {
@@ -515,6 +527,12 @@ const outwardSlice = createSlice({
       .addCase(approveOutward.fulfilled, (state, action) => {
         if (state.current && state.current.id === action.meta.arg.id) {
           state.current.workflowStatus = "PENDING_DISPATCH";
+        }
+      })
+
+      .addCase(holdOutward.fulfilled, (state, action) => {
+        if (state.current && state.current.id === action.meta.arg.id) {
+          state.current.workflowStatus = "ON_HOLD";
         }
       })
 

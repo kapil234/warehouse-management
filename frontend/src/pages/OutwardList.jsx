@@ -136,6 +136,7 @@ const STATUS_FILTERS_FULL = [
   { value: "PENDING_APPROVAL", label: "Pending approval" },
   { value: "PENDING_DISPATCH", label: "Pending dispatch" },
   { value: "DISPATCHED", label: "Dispatched" },
+  { value: "ON_HOLD", label: "On hold" },
   { value: "REJECTED", label: "Rejected" },
 ];
 const STATUS_FILTERS_WAREHOUSE = [

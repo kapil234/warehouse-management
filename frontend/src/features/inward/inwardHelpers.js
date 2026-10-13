@@ -26,7 +26,7 @@ export function formatInwardType(type) {
     return "Purchase - Service Stock";
   }
   if (lower.includes("service") && lower.includes("customer")) {
-    return "Service Stock from Customer";
+    return "Service/Faulty Stock from Customer";
   }
   if (lower.includes("service")) {
     return "Purchase - Service Stock";

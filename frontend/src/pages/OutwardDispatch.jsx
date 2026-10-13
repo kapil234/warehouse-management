@@ -13,7 +13,7 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isPlaceholder, paymentStatusLabel, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
+import { isPlaceholder, paymentStatusLabel, refTypeLabel, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 
 /**
@@ -117,7 +117,7 @@ export default function OutwardDispatch() {
   useEffect(() => {
     // Only trust a freshly loaded entry (detailStatus "succeeded"), never a leftover copy from the
     // page the admin just came from - right after approving, the old copy still says "pending approval".
-    if (detailStatus === "succeeded" && outward && outward.id === id && superAdmin && ["PENDING_APPROVAL", "REJECTED"].includes(outward.workflowStatus)) {
+    if (detailStatus === "succeeded" && outward && outward.id === id && superAdmin && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(outward.workflowStatus)) {
       toast.info("Approve this entry first, then fill the dispatch details.");
       navigate(`/outward/${id}`, { replace: true });
     }
@@ -180,7 +180,7 @@ export default function OutwardDispatch() {
   }
 
   // Approval stage (waiting for approval / rejected): no dispatch fields or documents yet.
-  if (detailStatus === "succeeded" && superAdmin && ["PENDING_APPROVAL", "REJECTED"].includes(outward?.workflowStatus)) {
+  if (detailStatus === "succeeded" && superAdmin && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(outward?.workflowStatus)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Opening approval...
@@ -240,6 +240,12 @@ export default function OutwardDispatch() {
               {showCost && <InfoField label="PI No." value={outward.piNumber} />}
               {showCost && <InfoField label="PI date" value={outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"} />}
               {showCost && <InfoField label="PI amount" value={outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")} />}
+              {showCost && <InfoField label="Ship to - Contact person" value={outward.shipToContactPerson} />}
+              {showCost && <InfoField label="Ship to - Contact no." value={outward.shipToContactNo} />}
+              {showCost && <InfoField label="Ship to - Location" value={outward.shipToLocation} />}
+              {showCost && <InfoField label="Bill to - Contact person" value={outward.billToContactPerson} />}
+              {showCost && <InfoField label="Bill to - Contact no." value={outward.billToContactNo} />}
+              {showCost && <InfoField label="Bill to - Email" value={outward.billToEmail} />}
               <InfoField label="Warehouse" value={outward.warehouse?.name} />
               <InfoField label="Created by" value={outward.createdBy?.name || outward.createdBy?.email} />
               {showCost && <InfoField label="Approved by" value={outward.approvedByName} />}
@@ -302,14 +308,16 @@ export default function OutwardDispatch() {
                       <tr className="border-b bg-gray-50 text-left text-gray-500">
                         <th className="px-3 py-2">Document type</th>
                         <th className="px-3 py-2">Reference no.</th>
+                        <th className="px-3 py-2">Vehicle no.</th>
                         <th className="px-3 py-2">E-way bill no.</th>
                       </tr>
                     </thead>
                     <tbody>
                       {accountRefs.map((r, i) => (
                         <tr key={r.id || i} className="border-b last:border-0">
-                          <td className="px-3 py-2">{r.refDocType}</td>
+                          <td className="px-3 py-2">{refTypeLabel(r.refDocType)}</td>
                           <td className="px-3 py-2">{r.refDocNumber || "-"}</td>
+                          <td className="px-3 py-2">{r.vehicleNumber || "-"}</td>
                           <td className="px-3 py-2">{r.ewayBillNumber || "-"}</td>
                         </tr>
                       ))}
@@ -334,6 +342,7 @@ export default function OutwardDispatch() {
                     {showCost && (
                       <>
                         <th className="px-3 py-2">Payment status</th>
+                        <th className="px-3 py-2">Approve By</th>
                         <th className="px-3 py-2">UTR</th>
                         <th className="px-3 py-2">Proof</th>
                       </>
@@ -351,6 +360,7 @@ export default function OutwardDispatch() {
                       {showCost && (
                         <>
                           <td className="px-3 py-2">{paymentStatusLabel(item.paymentStatus)}</td>
+                          <td className="px-3 py-2 break-all">{item.approvedBy || "-"}</td>
                           <td className="px-3 py-2 break-all">{item.utrNumber || "-"}</td>
                           <td className="px-3 py-2">
                             {item.hasProof ? (

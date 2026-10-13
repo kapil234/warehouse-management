@@ -10,6 +10,7 @@ import {
   Route,
   Check,
   X,
+  Pause,
   Paperclip,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -20,6 +21,7 @@ import {
   fetchOutwardById,
   approveOutward,
   rejectOutward,
+  holdOutward,
   downloadItemProof,
   downloadPiFile,
   clearCurrentOutward,
@@ -36,6 +38,7 @@ import {
   isPlaceholder,
   ACCOUNT_EDIT_STATUSES,
   isAccountDocCategory,
+  refTypeLabel,
 } from "../features/outward/outwardHelpers";
 import { downloadOutwardPdf } from "../features/outward/outwardPdf";
 import OutwardDocuments from "../components/OutwardDocuments";
@@ -59,7 +62,7 @@ export default function OutwardDetail() {
   const isAccount = role === "ACCOUNT";
   const isWarehouse = role === "WAREHOUSE_MANAGER";
 
-  // Account's approve / reject dialog: null | "approve" | "reject"
+  // Account's approve / hold / reject dialog: null | "approve" | "hold" | "reject"
   const [decision, setDecision] = useState(null);
   const [decisionRemarks, setDecisionRemarks] = useState("");
   const [deciding, setDeciding] = useState(false);
@@ -92,12 +95,16 @@ export default function OutwardDetail() {
       toast.error("Please give a reason for rejecting.");
       return;
     }
+    if (decision === "hold" && !decisionRemarks.trim()) {
+      toast.error("Please give a reason for putting this on hold.");
+      return;
+    }
     setDeciding(true);
-    const action = decision === "approve" ? approveOutward : rejectOutward;
+    const action = decision === "approve" ? approveOutward : decision === "hold" ? holdOutward : rejectOutward;
     const result = await dispatch(action({ id, remarks: decisionRemarks.trim() || undefined }));
     setDeciding(false);
     if (action.fulfilled.match(result)) {
-      toast.success(result.payload?.message || (decision === "approve" ? "Approved." : "Rejected."));
+      toast.success(result.payload?.message || (decision === "approve" ? "Approved." : decision === "hold" ? "Put on hold." : "Rejected."));
       setDecision(null);
       // Super admin: after approving, go straight on to the dispatch details.
       if (decision === "approve" && isSuperAdmin) {
@@ -170,11 +177,12 @@ export default function OutwardDetail() {
   // the Super admin's Update button does everything (sales info, cost, items and dispatch details);
   // the warehouse manager can still update the dispatch details, documents and vehicle number.
   // Sales can view entries the super admin created for their company, but only edit their own.
-  const canEdit = isSuperAdmin || (isSales && ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(workflow));
-  const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED"].includes(workflow);
-  const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
-  // Account, and the Super admin while the entry waits for approval, get the invoice panel with Approve / Reject at the bottom.
-  const showAccountPanel = isAccount || (isSuperAdmin && ["PENDING_APPROVAL", "REJECTED"].includes(workflow));
+  const canEdit = isSuperAdmin || (isSales && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"].includes(workflow));
+  const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(workflow);
+  const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "ON_HOLD", "PENDING_DISPATCH"].includes(workflow);
+  const canHold = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
+  // Account, and the Super admin while the entry waits for approval, get the invoice panel with Approve / Hold / Reject at the bottom.
+  const showAccountPanel = isAccount || (isSuperAdmin && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(workflow));
   const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));
   // Documents: add / upload / replace / delete for the warehouse manager (before and after dispatch)
   // and for the Super admin. Sales / Account never see the section for editing.
@@ -252,6 +260,9 @@ export default function OutwardDetail() {
               {canApprove && !showAccountPanel && (
                 <button type="button" onClick={() => openDecision("approve")} className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 sm:text-sm"><Check size={15} /> Approve</button>
               )}
+              {canHold && !showAccountPanel && (
+                <button type="button" onClick={() => openDecision("hold")} className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50 sm:text-sm"><Pause size={15} /> Hold</button>
+              )}
               {canReject && !showAccountPanel && (
                 <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
               )}
@@ -300,6 +311,12 @@ export default function OutwardDetail() {
                     <div className="text-sm font-medium text-gray-900 sm:text-base">-</div>
                   )}
                 </div>
+                <Info label="Ship to - Contact Person" value={outward.shipToContactPerson || "-"} />
+                <Info label="Ship to - Contact No." value={outward.shipToContactNo || "-"} />
+                <Info label="Ship to - Location" value={outward.shipToLocation || "-"} />
+                <Info label="Bill to - Contact Person" value={outward.billToContactPerson || "-"} />
+                <Info label="Bill to - Contact No." value={outward.billToContactNo || "-"} />
+                <Info label="Bill to - Email" value={outward.billToEmail || "-"} />
               </>
             )}
             <Info
@@ -330,20 +347,22 @@ export default function OutwardDetail() {
                   <tr className="border-b bg-gray-50 text-left text-gray-500">
                     <th className="py-2 px-3">Document Type</th>
                     <th className="py-2 px-3">Reference No.</th>
+                    <th className="py-2 px-3">Vehicle No.</th>
                     <th className="py-2 px-3">E-way Bill No.</th>
                   </tr>
                 </thead>
                 <tbody>
                   {referenceDocumentRows.map((ref, index) => (
                     <tr key={ref.id || index} className="border-b last:border-0">
-                      <td className="py-2 px-3">{ref.refDocType || "-"}</td>
+                      <td className="py-2 px-3">{refTypeLabel(ref.refDocType) || "-"}</td>
                       <td className="py-2 px-3">{ref.refDocNumber || "-"}</td>
+                      <td className="py-2 px-3">{ref.vehicleNumber || "-"}</td>
                       <td className="py-2 px-3">{ref.ewayBillNumber || "-"}</td>
                     </tr>
                   ))}
                   {referenceDocumentRows.length === 0 && (
                     <tr>
-                      <td colSpan="3" className="text-center py-4 text-gray-500">
+                      <td colSpan="4" className="text-center py-4 text-gray-500">
                         No reference documents
                       </td>
                     </tr>
@@ -356,16 +375,19 @@ export default function OutwardDetail() {
         </div>
 
         {/* Approval details - Sales / Account / Super admin only. Never sent to the warehouse. */}
-        {showCost && (workflow === "REJECTED" || outward.approvedByName || dispatched) && (
-          <div className={`rounded-xl border p-4 sm:p-6 ${workflow === "REJECTED" ? "border-red-200 bg-red-50" : "bg-white"}`}>
+        {showCost && (workflow === "REJECTED" || workflow === "ON_HOLD" || outward.approvedByName || dispatched) && (
+          <div className={`rounded-xl border p-4 sm:p-6 ${workflow === "REJECTED" ? "border-red-200 bg-red-50" : workflow === "ON_HOLD" ? "border-purple-200 bg-purple-50" : "bg-white"}`}>
             <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg">Approval</h2>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5">
-              <Info label={workflow === "REJECTED" ? "Rejected By" : "Approved By"} value={outward.approvedByName || "-"} />
-              <Info label={workflow === "REJECTED" ? "Rejected On" : "Approved On"} value={outward.approvedAt ? new Date(outward.approvedAt).toLocaleString("en-IN") : "-"} />
-              <Info label={workflow === "REJECTED" ? "Reason" : "Remarks"} value={outward.approvalRemarks || "-"} />
+              <Info label={workflow === "REJECTED" ? "Rejected By" : workflow === "ON_HOLD" ? "Put On Hold By" : "Approved By"} value={outward.approvedByName || "-"} />
+              <Info label={workflow === "REJECTED" ? "Rejected On" : workflow === "ON_HOLD" ? "Put On Hold On" : "Approved On"} value={outward.approvedAt ? new Date(outward.approvedAt).toLocaleString("en-IN") : "-"} />
+              <Info label={workflow === "REJECTED" || workflow === "ON_HOLD" ? "Reason" : "Remarks"} value={outward.approvalRemarks || "-"} />
               {dispatched && isSuperAdmin && <Info label="Dispatched By" value={outward.dispatchedByName || "-"} />}
               {dispatched && isSuperAdmin && <Info label="Dispatched On" value={outward.dispatchedAt ? new Date(outward.dispatchedAt).toLocaleString("en-IN") : "-"} />}
             </div>
+            {workflow === "ON_HOLD" && (
+              <p className="mt-3 text-xs text-purple-700">This entry is on hold. Account can approve or reject it later, or Sales can edit it and send it for approval again.</p>
+            )}
             {workflow === "REJECTED" && (
               <p className="mt-3 text-xs text-red-600">Sales can edit this entry and send it for approval again, or Account can approve it again.</p>
             )}
@@ -387,6 +409,7 @@ export default function OutwardDetail() {
                 {showCost && (
                   <>
                     <th className="py-2 px-1 sm:py-3 sm:px-3">Payment status</th>
+                    <th className="py-2 px-1 sm:py-3 sm:px-3">Approve By</th>
                     <th className="py-2 px-1 sm:py-3 sm:px-3">UTR</th>
                     <th className="py-2 px-1 sm:py-3 sm:px-3">Proof</th>
                   </>
@@ -416,6 +439,7 @@ export default function OutwardDetail() {
                           {paymentStatusLabel(item.paymentStatus)}
                         </span>
                       </td>
+                      <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.approvedBy || "-"}</td>
                       <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.utrNumber || "-"}</td>
                       <td className="py-2 px-1 sm:py-4 sm:px-3">
                         {item.hasProof ? (
@@ -450,6 +474,7 @@ export default function OutwardDetail() {
             editable={ACCOUNT_EDIT_STATUSES.includes(workflow)}
             canApprove={canApprove}
             canReject={canReject}
+            canHold={canHold}
             onDecision={openDecision}
           />
         )}
@@ -471,21 +496,23 @@ export default function OutwardDetail() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-base font-semibold text-gray-900">
-              {decision === "approve" ? "Approve this outward entry?" : "Reject this outward entry?"}
+              {decision === "approve" ? "Approve this outward entry?" : decision === "hold" ? "Put this outward entry on hold?" : "Reject this outward entry?"}
             </h3>
             <p className="mt-1 text-sm text-gray-500">
               {decision === "approve"
                 ? "The payment details will be marked approved and the entry goes to the warehouse manager for dispatch."
+                : decision === "hold"
+                ? "It stays with Account and is not sent to the warehouse. You can approve or reject it later."
                 : "It goes back to Sales, who can fix the details and send it again."}
             </p>
             <label className="mt-4 mb-1.5 block text-xs font-medium text-gray-500">
-              {decision === "approve" ? "Remarks (optional)" : "Reason for rejecting"}
+              {decision === "approve" ? "Remarks (optional)" : decision === "hold" ? "Reason for holding" : "Reason for rejecting"}
             </label>
             <textarea
               rows={3}
               value={decisionRemarks}
               onChange={(e) => setDecisionRemarks(e.target.value)}
-              placeholder={decision === "approve" ? "Any note for the record" : "Tell Sales what needs to be corrected"}
+              placeholder={decision === "approve" ? "Any note for the record" : decision === "hold" ? "Why is this on hold?" : "Tell Sales what needs to be corrected"}
               className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
             />
             <div className="mt-4 flex justify-end gap-2">
@@ -494,9 +521,9 @@ export default function OutwardDetail() {
                 type="button"
                 disabled={deciding}
                 onClick={submitDecision}
-                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${decision === "approve" ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"}`}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${decision === "approve" ? "bg-green-600 hover:bg-green-700" : decision === "hold" ? "bg-purple-600 hover:bg-purple-700" : "bg-red-600 hover:bg-red-700"}`}
               >
-                {deciding ? "Please wait..." : decision === "approve" ? "Approve" : "Reject"}
+                {deciding ? "Please wait..." : decision === "approve" ? "Approve" : decision === "hold" ? "Hold" : "Reject"}
               </button>
             </div>
           </div>

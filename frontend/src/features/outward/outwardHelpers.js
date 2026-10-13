@@ -18,22 +18,40 @@ export const REQUIRED_DOCUMENTS = [
 // -------------------------------------------------
 // Account team's side: reference documents + documents
 // -------------------------------------------------
-export const ACCOUNT_REF_TYPES = ["Invoice", "Other (Accounts)"];
-// Older entries may still hold an "E-way Bill" reference: it stays account-owned but is no longer offered.
-const ACCOUNT_REF_OWNED = [...ACCOUNT_REF_TYPES, "E-way Bill"];
+// Shown to the user as: Invoice / E-way Bill / DC Challan / Other ("Other (Accounts)" is stored under that
+// name so it never clashes with the warehouse manager's "Other").
+export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"];
+const ACCOUNT_REF_OWNED = ACCOUNT_REF_TYPES;
 export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
-export const ACCOUNT_REQUIRED_DOCUMENTS = ["Invoice"];
+// No account document is compulsory to upload: each reference type chosen just gets its own (optional)
+// row in the Documents section. Only the e-way bill is needed above EWAY_BILL_THRESHOLD (number OR document).
+export const ACCOUNT_REQUIRED_DOCUMENTS = [];
+export const refTypeLabel = (type) => (type === "Other (Accounts)" ? "Other" : type);
+// The document row each reference type opens in the Documents section ("Other" has none: it is added by name).
+const REF_TYPE_DOCUMENT = { Invoice: "Invoice", "E-way Bill": "E-way bill", "DC Challan": "DC challan" };
+export const refTypeDocument = (type) => REF_TYPE_DOCUMENT[type] || null;
+export const refNumberLabel = (type) =>
+  type === "Invoice" ? "Invoice no." : type === "E-way Bill" ? "E-way bill no." : type === "DC Challan" ? "Challan no." : "Reference doc no.";
+
+// Above this PI amount (Rs.) an e-way bill number or the e-way bill document is required before approval.
+export const EWAY_BILL_THRESHOLD = 100000;
+export const isAboveEwayLimit = (piAmount) => Number(piAmount) > EWAY_BILL_THRESHOLD;
+const isEwayCategory = (category) => /^e-?way/i.test(String(category || "").trim());
+// refs = rows being edited ({ refDocType, refDocNumber, ewayBillNumber }); docs / staged = uploaded and picked files.
+export const hasEwayBill = (refs = [], docs = [], staged = []) =>
+  refs.some((r) => (/e-?way/i.test(String(r.refDocType || "")) && String(r.refDocNumber || "").trim()) || String(r.ewayBillNumber || "").trim()) ||
+  [...docs, ...staged].some((d) => isEwayCategory(d.docCategory));
 export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
 
 const sameText = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
 export const isAccountRef = (ref) => ACCOUNT_REF_OWNED.some((t) => sameText(t, ref?.refDocType));
 export const isManagerRef = (ref) => !isAccountRef(ref);
-export const isAccountDocCategory = (category) => /^(invoice|e-?way|accounts other)/i.test(String(category || "").trim());
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|accounts other)/i.test(String(category || "").trim());
 // "Accounts other - GST certificate" -> "Other - GST certificate"
 export const docLabel = (category) => String(category || "Document").replace(/^accounts other/i, "Other");
 
 // Account may add / replace / delete its documents until the entry is dispatched.
-export const ACCOUNT_EDIT_STATUSES = ["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"];
+export const ACCOUNT_EDIT_STATUSES = ["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"];
 
 const totalCostOf = (items) => items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
 
@@ -137,6 +155,12 @@ export function formatOutwardEntry(outward, index) {
     totalCost: totalCostOf(items),
     piNumber: outward.piNumber || "",
     piAmount: outward.piAmount ?? null,
+    shipToContactPerson: outward.shipToContactPerson || "",
+    shipToContactNo: outward.shipToContactNo || "",
+    shipToLocation: outward.shipToLocation || "",
+    billToContactPerson: outward.billToContactPerson || "",
+    billToContactNo: outward.billToContactNo || "",
+    billToEmail: outward.billToEmail || "",
     refDocType: outward.refDocType || outward.ref_doc_type || "",
     refDocNumber: outward.refDocNumber || outward.ref_doc_number || "",
     refDocDate: outward.refDocDate || outward.ref_doc_date || "",
@@ -168,6 +192,7 @@ export const WORKFLOW_STATUS = {
   PENDING_DISPATCH: { label: "Pending dispatch", cls: "bg-blue-100 text-blue-700" },
   DISPATCHED: { label: "Dispatched", cls: "bg-green-100 text-green-700" },
   REJECTED: { label: "Rejected", cls: "bg-red-100 text-red-600" },
+  ON_HOLD: { label: "On hold", cls: "bg-purple-100 text-purple-700" },
 };
 
 // The warehouse manager never receives the real workflow status - only

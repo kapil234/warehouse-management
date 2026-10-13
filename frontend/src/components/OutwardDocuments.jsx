@@ -34,6 +34,8 @@ export default function OutwardDocuments({
   onStagedChange,
   // Which rows always show (uploaded or not), and what the "Add document" menu offers.
   requiredDocuments = REQUIRED_DOCUMENTS,
+  // Rows that show (uploaded or not) but never have to be uploaded - "Not uploaded" is shown in grey.
+  optionalDocuments = [],
   addMenuTypes = [...REQUIRED_DOCUMENTS, "Other"],
   // "Other" documents get this prefix in their stored name (Account uses it to tell its documents apart).
   otherPrefix = "",
@@ -173,19 +175,24 @@ export default function OutwardDocuments({
   };
 
   // Required types always show first (uploaded or not), then extra copies / custom ones.
-  const requiredLower = requiredDocuments.map((label) => label.toLowerCase());
+  const slotLabels = [
+    ...requiredDocuments,
+    ...optionalDocuments.filter((label) => !requiredDocuments.some((r) => sameCategory(r, label))),
+  ];
+  const requiredLower = slotLabels.map((label) => label.toLowerCase());
   const extraDocuments = documents.filter(
     (doc) => !requiredLower.includes(String(doc.docCategory || "").trim().toLowerCase())
   );
   const stagedFor = (label) => stagedFiles.find((f) => sameCategory(f.docCategory, label));
   const extraStaged = stagedFiles.filter((f) => !requiredLower.includes(String(f.docCategory || "").trim().toLowerCase()));
   const documentRows = [
-    ...requiredDocuments.map((label) => ({
+    ...slotLabels.map((label) => ({
       key: label,
       label,
       document: documents.find((doc) => sameCategory(doc.docCategory, label)),
       staged: stagedFor(label),
-      required: true,
+      required: requiredDocuments.some((r) => sameCategory(r, label)),
+      slot: true,
     })),
     ...extraDocuments.map((doc) => ({
       key: doc.id,
@@ -260,7 +267,7 @@ export default function OutwardDocuments({
         {rows.length === 0 && (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-gray-500">No documents uploaded yet.</p>
         )}
-        {rows.map(({ label, document, required, key, staged }) => {
+        {rows.map(({ label, document, required, slot, key, staged }) => {
           const isUploadingThis = uploadingDocs[label] === true;
           const isDownloading = document && docActionStatus[document.id] === "downloading";
           const isDeleting = document && docActionStatus[document.id] === "deleting";
@@ -296,7 +303,7 @@ export default function OutwardDocuments({
                         {staged.file.name} {" • "} {(staged.file.size / 1024).toFixed(1)} {" KB"}
                       </p>
                     ) : (
-                      <p className="text-[11px] text-red-500 mt-1 sm:text-xs">Not uploaded</p>
+                      <p className={`text-[11px] mt-1 sm:text-xs ${required ? "text-red-500" : "text-gray-400"}`}>{required ? "Not uploaded" : "Not uploaded (optional)"}</p>
                     )}
                   </div>
                 </div>
@@ -364,7 +371,7 @@ export default function OutwardDocuments({
                         <span className="hidden sm:inline">Remove</span>
                       </button>
                     </>
-                  ) : required && canManage ? (
+                  ) : slot && canManage ? (
                     <label
                       className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-black text-white hover:bg-gray-800 sm:gap-2 sm:px-3 sm:py-2 sm:text-sm ${
                         isUploadingThis ? "opacity-50 pointer-events-none" : ""

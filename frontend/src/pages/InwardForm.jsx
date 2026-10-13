@@ -35,11 +35,12 @@ import { fetchCompanies, selectAllCompanies } from "../features/company/companyS
 import useProducts from "../features/product/useProducts";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 import PartyNameField from "../components/PartyNameField";
+import { formatInwardType } from "../features/inward/inwardHelpers";
 
 /*
  * Inward form:
  * - No serial-number UI or validation.
- * - Company name is beside Supplier / Customer.
+ * - Company name is beside Supplier.
  * - Reference documents are repeatable.
  * - Every reference row contains document type, reference number and E-way bill.
  * - Documents section has the three default document types plus custom documents.
@@ -106,6 +107,13 @@ const buildDocumentRows = (existingDocs) => {
     }));
 
   return [...defaultRows, ...extraRows];
+};
+
+// AC / DC cables are sold by length, so picking one of those categories
+// pre-selects Meters (the user can still change it afterwards).
+const isCableCategory = (category) => {
+  const text = String(category || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return /\bcable\b/.test(text) && /\b(ac|dc)\b/.test(text);
 };
 
 const createItem = () => ({
@@ -231,7 +239,7 @@ export default function InwardForm() {
         dispatch(setSelectedWarehouse(x.warehouse));
         setSelectedCompanyId(x.warehouse.companyId || x.warehouse.company?.id || "");
       }
-      setInwardType(x.inwardType || "Purchase - New Stock");
+      setInwardType(formatInwardType(x.inwardType) !== "-" ? formatInwardType(x.inwardType) : "Purchase - New Stock");
       const dt = x.inwardDateTime || x.refDocDate || x.createdAt;
       if (dt) {
         const d = new Date(dt);
@@ -435,11 +443,14 @@ export default function InwardForm() {
         // Picking a different category / SKU means a different product, so the
         // (hidden) company carried over from an older entry no longer applies.
         if (field === "category") {
+          const wasCable = isCableCategory(item.category);
+          const nowCable = isCableCategory(value);
           return {
             ...item,
             category: value,
             sku: "",
             companyName: "",
+            uom: nowCable ? "Meters" : wasCable ? "Pcs" : item.uom,
           };
         }
 
@@ -482,7 +493,7 @@ export default function InwardForm() {
     e.preventDefault();
 
     if (!supplierName.trim()) {
-      toast.error("Please enter supplier / customer name.");
+      toast.error("Please enter supplier name.");
       return;
     }
 
@@ -715,7 +726,7 @@ export default function InwardForm() {
                     <option>Purchase - New Stock</option>
                     <option>Purchase - Service Stock</option>
                     <option>Return of Purchase</option>
-                    <option>Service Stock from Customer</option>
+                    <option>Service/Faulty Stock from Customer</option>
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 </div>
@@ -728,11 +739,11 @@ export default function InwardForm() {
                 value={supplierName}
                 onChange={setSupplierName}
                 storageKey="inward-supplier-names"
-                label="Supplier / Customer name"
+                label="Supplier name"
                 labelCls={labelCls}
                 inputCls={inputCls}
-                placeholder="Enter supplier / customer name"
-                addLabel="+ Add new supplier / customer"
+                placeholder="Enter supplier name"
+                addLabel="+ Add new supplier"
               />
             </div>
 

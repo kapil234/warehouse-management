@@ -1,4 +1,5 @@
 import { createPdfDocument } from "../shared/pdfExport";
+import { refTypeLabel } from "./outwardHelpers";
 
 // Builds and downloads a table-formatted PDF for a single outward
 // (dispatch) record: outward info, every reference document (invoice /
@@ -24,6 +25,12 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
           ["PI No.", outward.piNumber || "-"],
           ["PI Date", outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"],
           ["PI Amount", outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")],
+          ["Ship to - Contact Person", outward.shipToContactPerson || "-"],
+          ["Ship to - Contact No.", outward.shipToContactNo || "-"],
+          ["Ship to - Location", outward.shipToLocation || "-"],
+          ["Bill to - Contact Person", outward.billToContactPerson || "-"],
+          ["Bill to - Contact No.", outward.billToContactNo || "-"],
+          ["Bill to - Email", outward.billToEmail || "-"],
         ]
       : []),
     ...(includeDispatch
@@ -44,15 +51,16 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
     doc.subheading("Reference Documents");
     const referenceRows =
       Array.isArray(outward.referenceDocuments) && outward.referenceDocuments.length
-        ? outward.referenceDocuments.map((d) => [d.refDocType || "-", d.refDocNumber || "-", d.ewayBillNumber || "-"])
+        ? outward.referenceDocuments.map((d) => [refTypeLabel(d.refDocType) || "-", d.refDocNumber || "-", d.vehicleNumber || "-", d.ewayBillNumber || "-"])
         : outward.refDocNumber
-        ? [[outward.refDocType || "-", outward.refDocNumber || "-", outward.ewayBillNumber || "-"]]
+        ? [[outward.refDocType || "-", outward.refDocNumber || "-", "-", outward.ewayBillNumber || "-"]]
         : [];
     doc.table({
       columns: [
-        { header: "Document Type", width: 150 },
-        { header: "Reference No.", width: 200 },
-        { header: "E-way Bill No.", width: 165 },
+        { header: "Document Type", width: 125 },
+        { header: "Reference No.", width: 150 },
+        { header: "Vehicle No.", width: 105 },
+        { header: "E-way Bill No.", width: 135 },
       ],
       rows: referenceRows,
     });
@@ -64,11 +72,12 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
     columns: includeCost
       ? [
           { header: "#", width: 30 },
-          { header: "Category", width: 130 },
-          { header: "SKU / Model", width: 160 },
-          { header: "Qty", width: 50 },
-          { header: "UOM", width: 55 },
-          { header: "Payment status", width: 90 },
+          { header: "Category", width: 105 },
+          { header: "SKU / Model", width: 120 },
+          { header: "Qty", width: 40 },
+          { header: "UOM", width: 50 },
+          { header: "Payment status", width: 85 },
+          { header: "Approve By", width: 85 },
         ]
       : [
           { header: "#", width: 30 },
@@ -83,7 +92,7 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
       item.sku || "-",
       String(item.quantity || 0),
       item.uom || "-",
-      ...(includeCost ? [costLabel[item.paymentStatus] || "-"] : []),
+      ...(includeCost ? [costLabel[item.paymentStatus] || "-", item.approvedBy || "-"] : []),
     ]),
   });
 

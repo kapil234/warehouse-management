@@ -21,10 +21,12 @@ import {
   isPlaceholder,
   ACCOUNT_REF_TYPES,
   MANAGER_REF_TYPES,
-  ACCOUNT_REQUIRED_DOCUMENTS,
   ACCOUNT_DOC_PREFIX,
   isAccountRef,
   isAccountDocCategory,
+  refTypeLabel,
+  refTypeDocument,
+  refNumberLabel,
 } from "../features/outward/outwardHelpers";
 import useProducts from "../features/product/useProducts";
 import useOutwardStock, { stockKey } from "../features/outward/useOutwardStock";
@@ -54,6 +56,13 @@ import OutwardDocuments from "../components/OutwardDocuments";
  */
 
 const makeId = () => crypto.randomUUID();
+
+// AC / DC cables are sold by length: picking one of those categories shows Meters in the UOM dropdown
+// (it can still be changed afterwards, and goes back to Pcs when another category is picked).
+const isCableCategory = (category) => {
+  const text = String(category || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return /\bcable\b/.test(text) && /\b(ac|dc)\b/.test(text);
+};
 const getDateTimeLocal = (value) => {
   const d = value ? new Date(value) : new Date();
   if (Number.isNaN(d.getTime())) return getDateTimeLocal();
@@ -71,17 +80,17 @@ const newItem = () => ({
   uom: "Pcs",
   paymentStatus: "PENDING",
   utrNumber: "",
+  approvedBy: "", // shown while the payment is Pending / Partially completed
   proof: null, // a file uploaded now: { fileKey, fileName, fileType }
   keepProof: false, // editing: the proof saved earlier is still attached
   savedProofName: "",
 });
 
 // Account's references are Invoice / Other (Accounts); the warehouse manager's are Delivery Challan / Return Note / Other.
-const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
+const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "", vehicleNumber: "" });
 const newManagerRef = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "", ewayBillNumber: "" });
-// Entries saved earlier may hold an "E-way Bill" reference. It is no longer shown or offered,
-// but it is kept as it is when the entry is saved.
-const isLegacyEwayRef = (r) => /e-?way/i.test(String(r?.refDocType || ""));
+// "E-way Bill" is an Account reference type again, so nothing needs to be kept aside any more.
+const isLegacyEwayRef = () => false;
 
 const PROOF_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -112,6 +121,13 @@ export default function OutwardForm() {
   const [piUploading, setPiUploading] = useState(false);
   const piFileRef = useRef(piFile);
   piFileRef.current = piFile;
+  // Ship to / Bill to details, after the PI row.
+  const [shipToContactPerson, setShipToContactPerson] = useState("");
+  const [shipToContactNo, setShipToContactNo] = useState("");
+  const [shipToLocation, setShipToLocation] = useState("");
+  const [billToContactPerson, setBillToContactPerson] = useState("");
+  const [billToContactNo, setBillToContactNo] = useState("");
+  const [billToEmail, setBillToEmail] = useState("");
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [pickedWarehouseId, setPickedWarehouseId] = useState("");
   const [entryWarehouse, setEntryWarehouse] = useState(null); // edit mode: the entry's own warehouse
@@ -121,6 +137,7 @@ export default function OutwardForm() {
   // Edit mode: what this entry already held when it was opened (see availableFor).
   const [originalItems, setOriginalItems] = useState([]);
   const [rejection, setRejection] = useState(null); // { by, remarks } when Account sent it back
+  const [holdNote, setHoldNote] = useState(null); // { by, remarks } when Account put it on hold
   const [proofUploadingId, setProofUploadingId] = useState(null);
   // A new entry gets its id up front, so a payment proof is uploaded straight into
   // min/<warehouse code>/<outward id>/ and nothing is saved anywhere else.
@@ -212,7 +229,7 @@ export default function OutwardForm() {
         return;
       }
       const x = result.payload;
-      if (!isSuperAdmin && !["PENDING_APPROVAL", "REJECTED", "PENDING_DISPATCH"].includes(x.workflowStatus)) {
+      if (!isSuperAdmin && !["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"].includes(x.workflowStatus)) {
         toast.error("This entry has already been dispatched and can't be edited.");
         navigate(`/outward/${editId}`, { replace: true });
         return;
@@ -228,6 +245,12 @@ export default function OutwardForm() {
       setPiNumber(x.piNumber || "");
       setPiDate(x.piDate ? String(x.piDate).slice(0, 10) : "");
       setPiAmount(x.piAmount === null || x.piAmount === undefined ? "" : String(x.piAmount));
+      setShipToContactPerson(x.shipToContactPerson || "");
+      setShipToContactNo(x.shipToContactNo || "");
+      setShipToLocation(x.shipToLocation || "");
+      setBillToContactPerson(x.billToContactPerson || "");
+      setBillToContactNo(x.billToContactNo || "");
+      setBillToEmail(x.billToEmail || "");
       setKeepPiFile(Boolean(x.hasPiFile));
       setSavedPiFileName(x.piFileName || "");
       setItems(
@@ -241,6 +264,7 @@ export default function OutwardForm() {
           uom: i.uom || "Pcs",
           paymentStatus: i.paymentStatus || "PENDING",
           utrNumber: i.utrNumber || "",
+          approvedBy: i.approvedBy || "",
           keepProof: Boolean(i.hasProof),
           savedProofName: i.proofFileName || "",
         }))
@@ -256,7 +280,8 @@ export default function OutwardForm() {
         ...base,
         refDocType: r.refDocType || base.refDocType,
         refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
-        ewayBillNumber: r.ewayBillNumber || "", // not shown any more; kept as saved
+        ewayBillNumber: r.ewayBillNumber || "", // older entries: kept as saved
+        vehicleNumber: r.vehicleNumber || "",
       });
       const savedAccount = savedRefs.filter((r) => isAccountRef(r) && !isLegacyEwayRef(r));
       const savedManager = savedRefs.filter((r) => !isAccountRef(r));
@@ -269,6 +294,9 @@ export default function OutwardForm() {
       })));
       if (x.workflowStatus === "REJECTED") {
         setRejection({ by: x.approvedByName, remarks: x.approvalRemarks });
+      }
+      if (x.workflowStatus === "ON_HOLD") {
+        setHoldNote({ by: x.approvedByName, remarks: x.approvalRemarks });
       }
       setLoadingEntry(false);
     });
@@ -320,7 +348,10 @@ export default function OutwardForm() {
     // Picking a different category / SKU means a different product, so the
     // (hidden) company carried over from an older entry no longer applies.
     // The quantity is cleared too: it was typed against the previous model's stock limit.
-    if (field === "category") return { ...i, category: value, sku: "", companyName: "", quantity: "" };
+    if (field === "category") {
+      const uom = isCableCategory(value) ? "Meters" : isCableCategory(i.category) ? "Pcs" : i.uom;
+      return { ...i, category: value, sku: "", companyName: "", quantity: "", uom };
+    }
     if (field === "sku") return { ...i, sku: value, companyName: "", quantity: "" };
     return { ...i, [field]: value };
   }));
@@ -401,6 +432,11 @@ export default function OutwardForm() {
     if (!companyName.trim()) return toast.error("Company name is missing.");
     if (piAmount !== "" && (!Number.isFinite(Number(piAmount)) || Number(piAmount) < 0)) return toast.error("Please enter a valid PI amount.");
 
+    if (billToEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billToEmail.trim())) return toast.error("Please enter a valid Bill to email address.");
+    for (const [label, value] of [["Ship to contact no.", shipToContactNo], ["Bill to contact no.", billToContactNo]]) {
+      if (value.trim() && !/^[0-9+()\-\s]{6,20}$/.test(value.trim())) return toast.error(`Please enter a valid ${label}`);
+    }
+
     for (const [index, item] of items.entries()) {
       const label = `Item ${index + 1}`;
       if (!item.category) return toast.error(`${label}: please select a category.`);
@@ -408,6 +444,7 @@ export default function OutwardForm() {
       if (Number(item.quantity) <= 0) return toast.error(`${label}: please enter a valid quantity.`);
       if (!item.uom) return toast.error(`${label}: please select UOM.`);
       if (!item.paymentStatus) return toast.error(`${label}: please select the payment status.`);
+      if (item.paymentStatus !== "COMPLETED" && !item.approvedBy.trim()) return toast.error(`${label}: please enter Approve By.`);
       if (item.paymentStatus !== "PENDING" && !item.utrNumber.trim() && !item.proof && !item.keepProof) {
         return toast.error(`${label}: enter the UTR number or attach a payment proof (image / file).`);
       }
@@ -441,6 +478,12 @@ export default function OutwardForm() {
       piFileName: piFile?.fileName,
       piFileType: piFile?.fileType,
       keepPiFile: !piFile && keepPiFile,
+      shipToContactPerson: shipToContactPerson.trim() || undefined,
+      shipToContactNo: shipToContactNo.trim() || undefined,
+      shipToLocation: shipToLocation.trim() || undefined,
+      billToContactPerson: billToContactPerson.trim() || undefined,
+      billToContactNo: billToContactNo.trim() || undefined,
+      billToEmail: billToEmail.trim() || undefined,
       items: items.map((i) => {
         const paid = i.paymentStatus !== "PENDING";
         return {
@@ -452,6 +495,7 @@ export default function OutwardForm() {
           uom: i.uom,
           paymentStatus: i.paymentStatus,
           utrNumber: paid ? i.utrNumber.trim() || undefined : undefined,
+          approvedBy: i.paymentStatus !== "COMPLETED" ? i.approvedBy.trim() || undefined : undefined,
           proofFileKey: paid ? i.proof?.fileKey : undefined,
           proofFileName: paid ? i.proof?.fileName : undefined,
           proofFileType: paid ? i.proof?.fileType : undefined,
@@ -461,7 +505,12 @@ export default function OutwardForm() {
     };
 
     if (showDispatchSection) {
-      const toPayload = (r) => ({ refDocType: r.refDocType, refDocNumber: r.refDocNumber.trim(), ewayBillNumber: r.ewayBillNumber?.trim() || undefined });
+      const toPayload = (r) => ({
+        refDocType: r.refDocType,
+        refDocNumber: r.refDocNumber.trim(),
+        ewayBillNumber: r.ewayBillNumber?.trim() || undefined,
+        vehicleNumber: r.refDocType === "DC Challan" ? r.vehicleNumber?.trim() || undefined : undefined,
+      });
       const refs = [
         ...accountRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
         ...managerRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
@@ -522,6 +571,13 @@ export default function OutwardForm() {
         {alreadyApproved && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
             This entry is approved and waiting for dispatch. Saving any change sends it back to the Account team for approval, and the warehouse will not see it until it is approved again.
+          </div>
+        )}
+        {holdNote && (
+          <div className="mb-5 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-800">
+            <p className="font-semibold">On hold by Account{holdNote.by ? ` (${holdNote.by})` : ""}</p>
+            {holdNote.remarks && <p className="mt-1">Reason: {holdNote.remarks}</p>}
+            <p className="mt-1 text-xs text-purple-700">Update the details below and save to send it for approval again.</p>
           </div>
         )}
         {rejection && (
@@ -626,6 +682,22 @@ export default function OutwardForm() {
                 )}
               </div>
             </div>
+
+            {/* Ship to details */}
+            <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Ship to details</h3>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+              <div><label className={labelCls}>Contact person</label><input value={shipToContactPerson} onChange={(e) => setShipToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no.</label><input type="tel" value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Location</label><input value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location" className={inputCls} /></div>
+            </div>
+
+            {/* Bill to details */}
+            <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Bill to details</h3>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+              <div><label className={labelCls}>Contact person</label><input value={billToContactPerson} onChange={(e) => setBillToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no.</label><input type="tel" value={billToContactNo} onChange={(e) => setBillToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Email</label><input type="email" value={billToEmail} onChange={(e) => setBillToEmail(e.target.value)} placeholder="Enter email" className={inputCls} /></div>
+            </div>
           </section>
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
@@ -703,6 +775,12 @@ export default function OutwardForm() {
                             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                           </div>
                         </div>
+                        {item.paymentStatus !== "COMPLETED" && (
+                          <div>
+                            <label className={labelCls}>Approve By</label>
+                            <input value={item.approvedBy} onChange={(e) => updateItem(item.id, "approvedBy", e.target.value)} placeholder="Enter approver name" className={inputCls} />
+                          </div>
+                        )}
                       </div>
 
                       {paid && (
@@ -758,17 +836,20 @@ export default function OutwardForm() {
                           <button type="button" onClick={() => removeAccountRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                         </div>
                       )}
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className={`grid grid-cols-1 gap-4 ${r.refDocType === "DC Challan" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
                         <div>
                           <label className={labelCls}>Reference doc type</label>
                           <div className="relative">
                             <select value={r.refDocType} onChange={(e) => updateAccountRef(r.id, "refDocType", e.target.value)} className={`${inputCls} appearance-none`}>
-                              {ACCOUNT_REF_TYPES.map((t) => <option key={t}>{t}</option>)}
+                              {ACCOUNT_REF_TYPES.map((t) => <option key={t} value={t}>{refTypeLabel(t)}</option>)}
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                           </div>
                         </div>
-                        <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateAccountRef(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
+                        <div><label className={labelCls}>{refNumberLabel(r.refDocType)}</label><input value={r.refDocNumber} onChange={(e) => updateAccountRef(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
+                        {r.refDocType === "DC Challan" && (
+                          <div><label className={labelCls}>Vehicle no.</label><input value={r.vehicleNumber} onChange={(e) => updateAccountRef(r.id, "vehicleNumber", e.target.value)} placeholder="Enter vehicle number" className={inputCls} /></div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -779,12 +860,13 @@ export default function OutwardForm() {
                 outwardId={editId}
                 documents={(currentOutward?.documents || []).filter((d) => isAccountDocCategory(d.docCategory))}
                 canManage
-                requiredDocuments={ACCOUNT_REQUIRED_DOCUMENTS}
-                addMenuTypes={["Invoice", "Other"]}
+                requiredDocuments={[]}
+                optionalDocuments={[...new Set(accountRefs.map((r) => refTypeDocument(r.refDocType)).filter(Boolean))]}
+                addMenuTypes={["Invoice", "E-way bill", "DC challan", "Other"]}
                 otherPrefix={ACCOUNT_DOC_PREFIX}
                 showSummary={false}
                 title="Documents (Account)"
-                subtitle="Upload the invoice, or use Add document for another invoice or other file"
+                subtitle="One row for each reference document above. Uploading is optional."
               />
 
               {/* WAREHOUSE MANAGER part - dispatch details, delivery challan / return note references, dispatch documents. */}
