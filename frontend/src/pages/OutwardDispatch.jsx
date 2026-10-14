@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Loader2, Paperclip, Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
@@ -15,6 +15,8 @@ import {
 } from "../features/outward/outwardSlice";
 import { isReceivingDocCategory, isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
+import useSerialScanner from "../components/SerialScanner";
+import { buildSerialLines, initialSerialValues, serialPayload, serialProblem } from "../features/outward/serialHelpers";
 
 /**
  * =========================================================
@@ -67,6 +69,9 @@ export default function OutwardDispatch() {
   const [stagedDocs, setStagedDocs] = useState([]);
   const submittingRef = useRef(false); // stops the "already dispatched" redirect firing during our own save
   const [filled, setFilled] = useState(false);
+  // Serial numbers: one box per Pcs unit (an item of 4 Pcs -> 4 serial numbers).
+  const [serialValues, setSerialValues] = useState({});
+  const serialsInitFor = useRef(null);
   // Super admin can reject from here (reason required); it then shows Approve again on the details page.
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -124,6 +129,15 @@ export default function OutwardDispatch() {
   const alreadyDispatched = outward?.dispatchState === "Dispatched" || outward?.workflowStatus === "DISPATCHED";
   const superAdmin = isSuperAdminUser();
 
+  const serialLines = useMemo(() => buildSerialLines(outward?.items || []), [outward?.items]);
+  // Load saved serial numbers once per entry (later refreshes, e.g. a document upload, must not wipe what is being scanned).
+  useEffect(() => {
+    if (!outward || outward.id !== id || serialsInitFor.current === id) return;
+    serialsInitFor.current = id;
+    setSerialValues(initialSerialValues(buildSerialLines(outward.items || []), outward.serials || []));
+  }, [outward, id]);
+  const serial = useSerialScanner({ items: outward?.items || [], lines: serialLines, values: serialValues, onChange: setSerialValues });
+
   // After dispatch the Super admin uses Update (the full edit form, dispatch details included).
   // The warehouse manager stays here and can keep updating the dispatch details.
   useEffect(() => {
@@ -165,6 +179,15 @@ export default function OutwardDispatch() {
     if (!dispatchMode) return toast.error("Please select the dispatch mode.");
     if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
 
+    // Every Pcs unit needs its own serial number. Entries dispatched before serial numbers existed
+    // can still be updated without them (but if some are entered, all must be).
+    const serials = serialPayload(serialLines, serialValues);
+    const legacyDispatched = alreadyDispatched && !(outward.serials || []).length && serials.length === 0;
+    if (!legacyDispatched) {
+      const problem = serialProblem(serialLines, serialValues);
+      if (problem) return toast.error(problem);
+    }
+
     setSaving(true);
     submittingRef.current = true;
 
@@ -180,6 +203,7 @@ export default function OutwardDispatch() {
           driverContact: driverContact.trim() || undefined,
           remarks: remarks.trim() || undefined,
           referenceDocuments: refs,
+          ...(legacyDispatched ? {} : { serials }),
         },
       })
     );
@@ -338,8 +362,6 @@ export default function OutwardDispatch() {
                       <tr className="border-b bg-gray-50 text-left text-gray-500">
                         <th className="px-3 py-2">Document type</th>
                         <th className="px-3 py-2">Reference no.</th>
-                        <th className="px-3 py-2">Vehicle no.</th>
-                        <th className="px-3 py-2">E-way bill no.</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -347,8 +369,6 @@ export default function OutwardDispatch() {
                         <tr key={r.id || i} className="border-b last:border-0">
                           <td className="px-3 py-2">{refTypeLabel(r.refDocType)}</td>
                           <td className="px-3 py-2">{r.refDocNumber || "-"}</td>
-                          <td className="px-3 py-2">{r.vehicleNumber || "-"}</td>
-                          <td className="px-3 py-2">{r.ewayBillNumber || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -359,16 +379,20 @@ export default function OutwardDispatch() {
           </section>
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
-            <h2 className="mb-4 text-sm font-semibold text-gray-900">Item details</h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">Item details</h2>
+              {serial.badge}
+            </div>
             <div className="overflow-x-auto rounded-lg border">
-              <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
+              <table className={`w-full text-xs sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
                 <thead>
                   <tr className="border-b bg-gray-50 text-left text-gray-500">
-                    <th className="px-3 py-2">#</th>
-                    <th className="px-3 py-2">Category</th>
-                    <th className="px-3 py-2">Model</th>
-                    <th className="px-3 py-2">Quantity</th>
-                    <th className="px-3 py-2">UOM</th>
+                    <th className="px-1.5 py-2 sm:px-3">#</th>
+                    <th className="px-1.5 py-2 sm:px-3">Category</th>
+                    <th className="px-1.5 py-2 sm:px-3">Model</th>
+                    <th className="px-1.5 py-2 sm:px-3">Qty</th>
+                    <th className="px-1.5 py-2 sm:px-3">UOM</th>
+                    {serial.hasSerials && <th className="hidden px-3 py-2 sm:table-cell">SR. No</th>}
                     {showCost && (
                       <>
                         <th className="px-3 py-2">Payment status</th>
@@ -381,12 +405,14 @@ export default function OutwardDispatch() {
                 </thead>
                 <tbody>
                   {items.map((item, index) => (
-                    <tr key={item.id || index} className="border-b last:border-0">
-                      <td className="px-3 py-2">{index + 1}</td>
-                      <td className="px-3 py-2">{item.category || "-"}</td>
-                      <td className="px-3 py-2 font-medium">{item.sku || "-"}</td>
-                      <td className="px-3 py-2">{item.quantity}</td>
-                      <td className="px-3 py-2">{item.uom || "-"}</td>
+                    <Fragment key={item.id || index}>
+                    <tr className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-xs last:border-0 sm:text-sm`}>
+                      <td className="px-1.5 py-2 sm:px-3">{index + 1}</td>
+                      <td className="px-1.5 py-2 sm:px-3">{item.category || "-"}</td>
+                      <td className="whitespace-nowrap px-1.5 py-2 font-medium sm:px-3">{item.sku || "-"}</td>
+                      <td className="px-1.5 py-2 sm:px-3">{item.quantity}</td>
+                      <td className="px-1.5 py-2 sm:px-3">{item.uom || "-"}</td>
+                      {serial.hasSerials && <td className="hidden px-3 py-1 align-middle sm:table-cell">{serial.inputCell(item, index)}</td>}
                       {showCost && (
                         <>
                           <td className="px-3 py-2">{paymentStatusLabel(item.paymentStatus)}</td>
@@ -400,11 +426,17 @@ export default function OutwardDispatch() {
                         </>
                       )}
                     </tr>
+                    {serial.hasSerials && serial.mobileInputRow(item, index, 5 + 1 + (showCost ? 4 : 0))}
+                    {serial.hasSerials && serial.listRow(item, index, 5 + 1 + (showCost ? 4 : 0))}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
+            {serial.hasSerials && <p className="mt-2 text-xs text-gray-500">Type the serial no. and press Enter or Add, tap Scan to use the camera, or just scan with a connected Bluetooth / Wi-Fi / USB scanner. Each serial no. is listed under its item.</p>}
           </section>
+
+          {serial.camera}
 
           <OutwardDocuments
             outwardId={id}

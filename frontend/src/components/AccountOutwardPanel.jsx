@@ -35,7 +35,7 @@ import OutwardDocuments from "./OutwardDocuments";
  * =========================================================
  */
 
-const newReference = () => ({ id: crypto.randomUUID(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "", vehicleNumber: "" });
+const newReference = () => ({ id: crypto.randomUUID(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
 
 const fromServer = (outward) => {
   const saved = (Array.isArray(outward?.referenceDocuments) ? outward.referenceDocuments : []).filter(isAccountRef);
@@ -45,7 +45,6 @@ const fromServer = (outward) => {
         refDocType: ACCOUNT_REF_TYPES.includes(r.refDocType) ? r.refDocType : "Invoice",
         refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
         ewayBillNumber: r.ewayBillNumber || "", // older entries: kept as saved
-        vehicleNumber: r.vehicleNumber || "",
       }))
     : [newReference()];
 };
@@ -59,7 +58,6 @@ const signature = (rows) =>
         r.refDocType,
         String(r.refDocNumber || "").trim(),
         String(r.ewayBillNumber || "").trim(),
-        r.refDocType === "DC Challan" ? String(r.vehicleNumber || "").trim() : "",
       ])
   );
 
@@ -118,7 +116,6 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
         refDocType: r.refDocType,
         refDocNumber: r.refDocNumber.trim(),
         ewayBillNumber: r.ewayBillNumber.trim() || undefined,
-        vehicleNumber: r.refDocType === "DC Challan" ? r.vehicleNumber.trim() || undefined : undefined,
       }));
 
     setSaving(true);
@@ -160,8 +157,6 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
                 <tr className="border-b bg-gray-50 text-left text-gray-500">
                   <th className="py-2 px-3">Document type</th>
                   <th className="py-2 px-3">Reference no.</th>
-                  <th className="py-2 px-3">Vehicle no.</th>
-                  <th className="py-2 px-3">E-way bill no.</th>
                 </tr>
               </thead>
               <tbody>
@@ -169,12 +164,10 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
                   <tr key={r.id || i} className="border-b last:border-0">
                     <td className="py-2 px-3">{refTypeLabel(r.refDocType)}</td>
                     <td className="py-2 px-3">{r.refDocNumber || "-"}</td>
-                    <td className="py-2 px-3">{r.vehicleNumber || "-"}</td>
-                    <td className="py-2 px-3">{r.ewayBillNumber || "-"}</td>
                   </tr>
                 ))}
                 {readOnlyRefs.length === 0 && (
-                  <tr><td colSpan={4} className="py-4 text-center text-gray-500">No reference documents</td></tr>
+                  <tr><td colSpan={2} className="py-4 text-center text-gray-500">No reference documents</td></tr>
                 )}
               </tbody>
             </table>
@@ -230,7 +223,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
                   <button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                 </div>
               )}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
                   <label className={labelCls}>Reference doc type</label>
                   <div className="relative">
@@ -244,12 +237,6 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
                   <label className={labelCls}>{refNumberLabel(r.refDocType)}</label>
                   <input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} />
                 </div>
-                {r.refDocType === "DC Challan" && (
-                  <div>
-                    <label className={labelCls}>Vehicle no.</label>
-                    <input value={r.vehicleNumber} onChange={(e) => updateReference(r.id, "vehicleNumber", e.target.value)} placeholder="Enter vehicle number" className={inputCls} />
-                  </div>
-                )}
               </div>
             </div>
           ))}

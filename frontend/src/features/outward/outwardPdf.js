@@ -108,6 +108,16 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
     ]),
   });
 
+  const serials = Array.isArray(outward.serials) ? outward.serials : [];
+  if (serials.length) {
+    doc.spacer(4);
+    const groups = [...new Set(serials.map((s) => `${s.category}||${s.sku}`))];
+    for (const g of groups) {
+      const rows = serials.filter((s) => `${s.category}||${s.sku}` === g);
+      doc.paragraph(`Serial numbers - ${rows[0].sku} (${rows.length}): ${rows.map((s) => s.serialNo).join(", ")}`, { size: 9 });
+    }
+  }
+
   if (includeDispatch) {
     doc.spacer(4);
     doc.paragraph(`Remarks: ${outward.remarks || "-"}`, { size: 9.5 });

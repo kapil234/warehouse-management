@@ -485,6 +485,25 @@ export default function OutwardDetail() {
           </div>
         </div>
 
+        {Array.isArray(outward.serials) && outward.serials.length > 0 && (
+          <div className="bg-white rounded-xl border p-4 sm:p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Serial numbers</h2>
+            <div className="space-y-4">
+              {[...new Set(outward.serials.map((s) => `${s.category}||${s.sku}`))].map((groupKey) => {
+                const group = outward.serials.filter((s) => `${s.category}||${s.sku}` === groupKey);
+                return (
+                  <div key={groupKey}>
+                    <p className="mb-2 text-sm font-medium text-gray-900">{group[0].sku} <span className="text-xs font-normal text-gray-500">({group[0].category}) · {group.length} Pcs</span></p>
+                    <div className="flex flex-wrap gap-2">
+                      {group.map((s) => <span key={s.id || s.serialNo} className="rounded-md bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800">{s.serialNo}</span>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Account: its own reference documents + documents (invoice / e-way bill / other), editable until dispatch. */}
         {showAccountPanel && (
           <AccountOutwardPanel

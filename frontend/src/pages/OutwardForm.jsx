@@ -89,7 +89,7 @@ const newItem = () => ({
 });
 
 // Account's references are Invoice / Other (Accounts); the warehouse manager's are Delivery Challan / Return Note / Other.
-const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "", vehicleNumber: "" });
+const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
 const newManagerRef = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "", ewayBillNumber: "" });
 // "E-way Bill" is an Account reference type again, so nothing needs to be kept aside any more.
 const isLegacyEwayRef = () => false;
@@ -287,7 +287,6 @@ export default function OutwardForm() {
         refDocType: r.refDocType || base.refDocType,
         refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
         ewayBillNumber: r.ewayBillNumber || "", // older entries: kept as saved
-        vehicleNumber: r.vehicleNumber || "",
       });
       const savedAccount = savedRefs.filter((r) => isAccountRef(r) && !isLegacyEwayRef(r));
       const savedManager = savedRefs.filter((r) => !isAccountRef(r));
@@ -515,7 +514,6 @@ export default function OutwardForm() {
         refDocType: r.refDocType,
         refDocNumber: r.refDocNumber.trim(),
         ewayBillNumber: r.ewayBillNumber?.trim() || undefined,
-        vehicleNumber: r.refDocType === "DC Challan" ? r.vehicleNumber?.trim() || undefined : undefined,
       });
       const refs = [
         ...accountRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
@@ -844,7 +842,7 @@ export default function OutwardForm() {
                           <button type="button" onClick={() => removeAccountRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                         </div>
                       )}
-                      <div className={`grid grid-cols-1 gap-4 ${r.refDocType === "DC Challan" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div>
                           <label className={labelCls}>Reference doc type</label>
                           <div className="relative">
@@ -855,9 +853,6 @@ export default function OutwardForm() {
                           </div>
                         </div>
                         <div><label className={labelCls}>{refNumberLabel(r.refDocType)}</label><input value={r.refDocNumber} onChange={(e) => updateAccountRef(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
-                        {r.refDocType === "DC Challan" && (
-                          <div><label className={labelCls}>Vehicle no.</label><input value={r.vehicleNumber} onChange={(e) => updateAccountRef(r.id, "vehicleNumber", e.target.value)} placeholder="Enter vehicle number" className={inputCls} /></div>
-                        )}
                       </div>
                     </div>
                   ))}
