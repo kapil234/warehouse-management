@@ -18,6 +18,7 @@ import {
   OutwardList,
   OutwardDetail,
   OutwardDispatch,
+  OutwardReceiving,
   AllUsers,
   WarehouseManagement,
   CompanyManagement,
@@ -102,6 +103,8 @@ const router = createBrowserRouter([
   { path: "/outward/:id/edit", element: fullScreen(<OutwardForm />, SALES_ROLES) },
   // Warehouse manager fills vehicle / dispatch details after Account's approval.
   { path: "/outward/:id/dispatch", element: fullScreen(<OutwardDispatch />, DISPATCH_ROLES) },
+  // Right after dispatch: receiving date, receiver details and receiving documents.
+  { path: "/outward/:id/receiving", element: fullScreen(<OutwardReceiving />, DISPATCH_ROLES) },
   { path: "/outward/:id", element: fullScreen(<OutwardDetail />) },
 ]);
 

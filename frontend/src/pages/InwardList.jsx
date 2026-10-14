@@ -353,7 +353,7 @@ function DateRangeFilter({
 
             <div className="flex items-center gap-2 px-1">
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                <label className="mb-1 block text-xs font-semibold text-black">
                   From
                 </label>
 
@@ -369,7 +369,7 @@ function DateRangeFilter({
               </div>
 
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                <label className="mb-1 block text-xs font-semibold text-black">
                   To
                 </label>
 

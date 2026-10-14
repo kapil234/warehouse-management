@@ -1,5 +1,5 @@
 import { createPdfDocument } from "../shared/pdfExport";
-import { refTypeLabel } from "./outwardHelpers";
+import { refTypeLabel, isReceivingDocCategory, docLabel } from "./outwardHelpers";
 
 // Builds and downloads a table-formatted PDF for a single outward
 // (dispatch) record: outward info, every reference document (invoice /
@@ -37,6 +37,16 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
       ? [
           ["Dispatch Mode", outward.dispatchMode || "-"],
           ["Vehicle / AWB Number", outward.vehicleNumber || "-"],
+          ["Driver Name", outward.driverName || "-"],
+          ["Driver Contact", outward.driverContact || "-"],
+          ...(outward.receivedDate
+            ? [
+                ["Receiving Date", new Date(outward.receivedDate).toLocaleDateString("en-IN")],
+                ["Receiver Name", outward.receiverName || "-"],
+                ["Receiver Contact", outward.receiverContact || "-"],
+                ["Receiving Remarks", outward.receivingRemarks || "-"],
+              ]
+            : []),
         ]
       : []),
     [
@@ -49,20 +59,22 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
 
   if (includeDispatch) {
     doc.subheading("Reference Documents");
-    const referenceRows =
+    const baseRows =
       Array.isArray(outward.referenceDocuments) && outward.referenceDocuments.length
-        ? outward.referenceDocuments.map((d) => [refTypeLabel(d.refDocType) || "-", d.refDocNumber || "-", d.vehicleNumber || "-", d.ewayBillNumber || "-"])
+        ? outward.referenceDocuments.map((d) => [refTypeLabel(d.refDocType) || "-", d.refDocNumber || "-"])
         : outward.refDocNumber
-        ? [[outward.refDocType || "-", outward.refDocNumber || "-", "-", outward.ewayBillNumber || "-"]]
+        ? [[refTypeLabel(outward.refDocType) || "-", outward.refDocNumber || "-"]]
         : [];
+    // An uploaded receiving copy / photo is listed here too.
+    const receivingRows = documentRows
+      .filter((row) => row.document && isReceivingDocCategory(row.label))
+      .map((row) => [docLabel(row.label), "-"]);
     doc.table({
       columns: [
-        { header: "Document Type", width: 125 },
-        { header: "Reference No.", width: 150 },
-        { header: "Vehicle No.", width: 105 },
-        { header: "E-way Bill No.", width: 135 },
+        { header: "Document Type", width: 250 },
+        { header: "Reference No.", width: 265 },
       ],
-      rows: referenceRows,
+      rows: [...baseRows, ...receivingRows],
     });
   }
 
@@ -97,24 +109,6 @@ export function downloadOutwardPdf(outward, items, documentRows, currentStatus, 
   });
 
   if (includeDispatch) {
-    doc.subheading("Documents");
-    doc.table({
-      columns: [
-        { header: "Document", width: 150 },
-        { header: "File Name", width: 170 },
-        { header: "Status", width: 75 },
-        { header: "Type", width: 60 },
-        { header: "Size (KB)", width: 60 },
-      ],
-      rows: documentRows.map((row) => [
-        row.label,
-        row.document?.fileName || (row.document?.fileKey ? String(row.document.fileKey).split("/").pop() : "-"),
-        row.document ? "Uploaded" : "Pending",
-        row.document?.fileType || "-",
-        row.document ? (Number(row.document.fileSize || 0) / 1024).toFixed(1) : "-",
-      ]),
-    });
-
     doc.spacer(4);
     doc.paragraph(`Remarks: ${outward.remarks || "-"}`, { size: 9.5 });
   }

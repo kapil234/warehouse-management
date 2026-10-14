@@ -297,7 +297,7 @@ export default function ProductManagement() {
               <div className="p-5 space-y-4">
                 {/* Category */}
                 <div>
-                  <span className="mb-1 block text-sm text-gray-500">Item category</span>
+                  <span className="mb-1 block text-sm font-semibold text-black">Item category</span>
 
                   {categoryMode === "list" ? (
                     <select
@@ -341,7 +341,7 @@ export default function ProductManagement() {
 
                 {/* SKU */}
                 <label className="block">
-                  <span className="mb-1 block text-sm text-gray-500">SKU / Module name</span>
+                  <span className="mb-1 block text-sm font-semibold text-black">SKU / Module name</span>
                   <input
                     value={form.sku}
                     onChange={(e) => setForm((f) => ({ ...f, sku: e.target.value }))}

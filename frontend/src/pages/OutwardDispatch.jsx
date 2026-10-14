@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Loader2, Paperclip, Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
@@ -13,7 +13,7 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isPlaceholder, paymentStatusLabel, refTypeLabel, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
+import { isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 
 /**
@@ -25,6 +25,10 @@ import OutwardDocuments from "../components/OutwardDocuments";
  * sees the item details (category, model, quantity, UOM) and fills the
  * dispatch side: reference documents, dispatch mode, vehicle / AWB number
  * and remarks. Cost, UTR and approval details are never sent to them.
+ *
+ * Driver name / contact are part of the dispatch details. Every reference document type chosen
+ * (Delivery Challan, Return Note, Bilty, Other) opens its own row in the Documents section to upload.
+ * After the first dispatch the manager is taken to the receiving details form.
  * =========================================================
  */
 
@@ -34,6 +38,7 @@ const isSuperAdminUser = () => {
 
 const makeId = () => crypto.randomUUID();
 const newReference = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "" });
+const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
 const toLocalInput = (value) => {
   const d = value ? new Date(value) : new Date();
   if (Number.isNaN(d.getTime())) return toLocalInput();
@@ -54,6 +59,8 @@ export default function OutwardDispatch() {
   const [references, setReferences] = useState([newReference()]);
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [driverContact, setDriverContact] = useState("");
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
   // Documents picked here are sent together with the dispatch details when the form is saved.
@@ -66,7 +73,7 @@ export default function OutwardDispatch() {
   const [rejecting, setRejecting] = useState(false);
 
   const inputCls = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
-  const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
+  const labelCls = "block text-sm font-semibold text-black mb-1.5";
 
   useEffect(() => {
     if (id) dispatch(fetchOutwardById(id));
@@ -92,6 +99,8 @@ export default function OutwardDispatch() {
     }
     if (outward.dispatchMode && !isPlaceholder(outward.dispatchMode)) setDispatchMode(outward.dispatchMode);
     setVehicleNumber(outward.vehicleNumber || "");
+    setDriverName(outward.driverName || "");
+    setDriverContact(outward.driverContact || "");
     setRemarks(outward.remarks || "");
     if (outward.dispatchState === "Dispatched" || outward.workflowStatus === "DISPATCHED") {
       setDispatchDateTime(toLocalInput(outward.refDocDate));
@@ -101,6 +110,16 @@ export default function OutwardDispatch() {
   const updateReference = (rid, field, value) => setReferences((p) => p.map((r) => (r.id === rid ? { ...r, [field]: value } : r)));
   const addReference = () => setReferences((p) => [...p, newReference()]);
   const removeReference = (rid) => setReferences((p) => (p.length === 1 ? p : p.filter((r) => r.id !== rid)));
+
+  // One (optional) upload row for each reference document type that is chosen: Bilty -> Bilty, Return Note -> Return note ...
+  const documentSlots = useMemo(() => {
+    const slots = [];
+    for (const r of references) {
+      const slot = refTypeDocument(r.refDocType);
+      if (slot && !slots.includes(slot)) slots.push(slot);
+    }
+    return slots;
+  }, [references]);
 
   const alreadyDispatched = outward?.dispatchState === "Dispatched" || outward?.workflowStatus === "DISPATCHED";
   const superAdmin = isSuperAdminUser();
@@ -144,6 +163,7 @@ export default function OutwardDispatch() {
       }));
     if (!refs.length) return toast.error("Please enter at least one reference document number.");
     if (!dispatchMode) return toast.error("Please select the dispatch mode.");
+    if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
 
     setSaving(true);
     submittingRef.current = true;
@@ -156,6 +176,8 @@ export default function OutwardDispatch() {
           outwardDateTime: dispatchDateTime,
           dispatchMode,
           vehicleNumber: vehicleNumber.trim() || undefined,
+          driverName: driverName.trim() || undefined,
+          driverContact: driverContact.trim() || undefined,
           remarks: remarks.trim() || undefined,
           referenceDocuments: refs,
         },
@@ -167,8 +189,14 @@ export default function OutwardDispatch() {
       submittingRef.current = false;
       return toast.error(result.payload || "Failed to save dispatch details.");
     }
-    toast.success(alreadyDispatched ? "Dispatch details updated." : "Dispatched successfully.");
-    navigate("/outward", { replace: true });
+    if (alreadyDispatched) {
+      toast.success("Dispatch details updated.");
+      navigate("/outward", { replace: true });
+      return;
+    }
+    // First dispatch: go straight on to the receiving details form.
+    toast.success("Dispatched successfully. Please fill the receiving details.");
+    navigate(`/outward/${id}/receiving`, { replace: true });
   };
 
   if (detailStatus === "loading" || (detailStatus === "idle" && !outward) || (outward && outward.id !== id)) {
@@ -268,6 +296,8 @@ export default function OutwardDispatch() {
                 </div>
               </div>
               <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
+              <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
+              <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
             </div>
 
             <div className="mt-5 flex items-center justify-between">
@@ -279,7 +309,7 @@ export default function OutwardDispatch() {
                 <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                   {references.length > 1 && (
                     <div className="mb-3 flex items-center justify-between">
-                      <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
+                      <span className="text-sm font-semibold text-black">Reference document {index + 1}</span>
                       <button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                     </div>
                   )}
@@ -293,7 +323,7 @@ export default function OutwardDispatch() {
                         <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                       </div>
                     </div>
-                    <div><label className={labelCls}>Reference doc no.</label><input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder="Enter document number" className={inputCls} /></div>
+                    <div><label className={labelCls}>{r.refDocType === "Bilty" ? "Bilty no." : "Reference doc no."}</label><input value={r.refDocNumber} onChange={(e) => updateReference(r.id, "refDocNumber", e.target.value)} placeholder={r.refDocType === "Bilty" ? "Enter bilty number" : "Enter document number"} className={inputCls} /></div>
                   </div>
                 </div>
               ))}
@@ -380,6 +410,11 @@ export default function OutwardDispatch() {
             outwardId={id}
             documents={outward.documents || []}
             canManage
+            requiredDocuments={[]}
+            showSummary={false}
+            optionalDocuments={documentSlots}
+            addMenuTypes={[...REQUIRED_DOCUMENTS, "Bilty", "Return note", "Other"]}
+            subtitle="One row for each reference document above. Upload, download, replace or delete documents."
             deferred={!alreadyDispatched}
             stagedFiles={stagedDocs}
             onStagedChange={setStagedDocs}
@@ -403,7 +438,7 @@ export default function OutwardDispatch() {
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-base font-semibold text-gray-900">Reject this outward entry?</h3>
             <p className="mt-1 text-sm text-gray-500">It becomes Rejected. You can approve it again, or Sales can fix the details and send it again.</p>
-            <label className="mt-4 mb-1.5 block text-xs font-medium text-gray-500">Reason for rejecting</label>
+            <label className="mt-4 mb-1.5 block text-sm font-semibold text-black">Reason for rejecting</label>
             <textarea rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Tell Sales what needs to be corrected" className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" disabled={rejecting} onClick={() => setRejectOpen(false)} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>

@@ -22,13 +22,22 @@ export const REQUIRED_DOCUMENTS = [
 // name so it never clashes with the warehouse manager's "Other").
 export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"];
 const ACCOUNT_REF_OWNED = ACCOUNT_REF_TYPES;
-export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
+export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Bilty", "Other"];
 // No account document is compulsory to upload: each reference type chosen just gets its own (optional)
 // row in the Documents section. Only the e-way bill is needed above EWAY_BILL_THRESHOLD (number OR document).
 export const ACCOUNT_REQUIRED_DOCUMENTS = [];
 export const refTypeLabel = (type) => (type === "Other (Accounts)" ? "Other" : type);
-// The document row each reference type opens in the Documents section ("Other" has none: it is added by name).
-const REF_TYPE_DOCUMENT = { Invoice: "Invoice", "E-way Bill": "E-way bill", "DC Challan": "DC challan" };
+// The document row each reference type opens in the Documents section.
+// Warehouse manager types open their own row too: choose Bilty -> a Bilty row to upload, and so on.
+const REF_TYPE_DOCUMENT = {
+  Invoice: "Invoice",
+  "E-way Bill": "E-way bill",
+  "DC Challan": "DC challan",
+  "Delivery Challan": "Delivery challan",
+  "Return Note": "Return note",
+  Bilty: "Bilty",
+  Other: "Other",
+};
 export const refTypeDocument = (type) => REF_TYPE_DOCUMENT[type] || null;
 export const refNumberLabel = (type) =>
   type === "Invoice" ? "Invoice no." : type === "E-way Bill" ? "E-way bill no." : type === "DC Challan" ? "Challan no." : "Reference doc no.";
@@ -41,6 +50,12 @@ const isEwayCategory = (category) => /^e-?way/i.test(String(category || "").trim
 export const hasEwayBill = (refs = [], docs = [], staged = []) =>
   refs.some((r) => (/e-?way/i.test(String(r.refDocType || "")) && String(r.refDocNumber || "").trim()) || String(r.ewayBillNumber || "").trim()) ||
   [...docs, ...staged].some((d) => isEwayCategory(d.docCategory));
+// Receiving details (filled by the warehouse manager after dispatch).
+export const RECEIVING_REQUIRED_DOCUMENT = "Receiving copy";
+export const RECEIVING_ADD_MENU = ["Receiving photo", "Other"];
+export const RECEIVING_DOC_PREFIX = "Receiving ";
+export const isReceivingDocCategory = (category) => /^receiving/i.test(String(category || "").trim());
+export const isReceived = (outward) => Boolean(outward?.receivedAt || outward?.receivedDate);
 export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
 
 const sameText = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
@@ -167,6 +182,10 @@ export function formatOutwardEntry(outward, index) {
     ewayBillNumber: outward.ewayBillNumber || outward.eway_bill_number || "",
     dispatchMode: outward.dispatchMode || outward.dispatch_mode || "",
     vehicleNumber: outward.vehicleNumber || outward.vehicle_number || "",
+    driverName: outward.driverName || "",
+    driverContact: outward.driverContact || "",
+    receivedDate: outward.receivedDate || null,
+    receivedAt: outward.receivedAt || null,
     remarks: outward.remarks || "",
     documents,
     createdAt,
@@ -200,6 +219,22 @@ export const WORKFLOW_STATUS = {
 export const DISPATCH_STATE = {
   Pending: { label: "Pending dispatch", cls: "bg-blue-100 text-blue-700" },
   Dispatched: { label: "Dispatched", cls: "bg-green-100 text-green-700" },
+};
+
+// Once dispatched, EVERY role sees the receiving state instead of plain "Dispatched":
+// "Receiving pending" until the receiving form is filled, then "Receiving completed".
+export const RECEIVING_STATE = {
+  pending: { label: "Receiving pending", cls: "bg-amber-100 text-amber-700" },
+  completed: { label: "Receiving completed", cls: "bg-green-100 text-green-700" },
+};
+
+export const getStatusStyle = (outward) => {
+  if (!outward) return null;
+  const dispatched = outward.workflowStatus
+    ? outward.workflowStatus === "DISPATCHED"
+    : outward.dispatchState === "Dispatched";
+  if (dispatched) return isReceived(outward) ? RECEIVING_STATE.completed : RECEIVING_STATE.pending;
+  return outward.workflowStatus ? WORKFLOW_STATUS[outward.workflowStatus] : DISPATCH_STATE[outward.dispatchState];
 };
 
 export const isPlaceholder = (value) => !value || String(value).trim().toLowerCase() === "pending";

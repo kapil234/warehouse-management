@@ -269,7 +269,7 @@ export function proofKeyProblem(items = [], minId, outwardNumber, piFileKey) {
  * Each side only ever replaces its own rows, so Account and the warehouse never overwrite each other.
  */
 export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"]; // shown to the user as Invoice / E-way Bill / DC Challan / Other
-export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Other"];
+export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Bilty", "Other"];
 
 export const canonicalAccountRefType = (type) =>
   ACCOUNT_REF_TYPES.find((t) => t.toLowerCase() === String(type || "").trim().toLowerCase()) || null;
@@ -297,3 +297,38 @@ export function ewayBillProblem({ piAmount, referenceDocuments = [], documents =
     ? null
     : "The PI amount is above Rs. 1,00,000: add the e-way bill number (reference type E-way Bill) or upload the e-way bill document before approving.";
 }
+
+
+const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
+
+/** Driver name / contact are optional, but a contact must look like a phone number when given. */
+export function validateDriver(data) {
+  const contact = String(data.driverContact || "").trim();
+  if (contact && !PHONE_RE.test(contact)) return "Driver contact is not valid";
+  return null;
+}
+
+/** Returns an error message, or null when the receiving details are valid. */
+export function validateReceiving(data, dispatchedAt) {
+  const name = String(data.receiverName || "").trim();
+  if (!name) return "Receiver name is required";
+  const contact = String(data.receiverContact || "").trim();
+  if (!contact) return "Receiver contact is required";
+  if (!PHONE_RE.test(contact)) return "Receiver contact is not valid";
+  const date = data.receivedDate ? new Date(data.receivedDate) : null;
+  if (!date || Number.isNaN(date.getTime())) return "Receiving date is required";
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  if (date > endOfToday) return "Receiving date cannot be in the future";
+  if (dispatchedAt) {
+    const dispatchDay = new Date(dispatchedAt);
+    dispatchDay.setHours(0, 0, 0, 0);
+    if (date < dispatchDay) return "Receiving date cannot be before the dispatch date";
+  }
+  return null;
+}
+
+/** Receiving documents (copy / photo ...) are stored under names starting with "Receiving". */
+export const RECEIVING_DOC_PREFIX = "Receiving";
+export const RECEIVING_REQUIRED_DOC = "Receiving copy";
+export const isReceivingDocCategory = (category) => /^receiving/i.test(String(category || "").trim());

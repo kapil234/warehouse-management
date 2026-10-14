@@ -33,6 +33,10 @@ import {
   canonicalAccountRefType,
   isAccountRefType,
   isAccountDocCategory,
+  validateDriver,
+  validateReceiving,
+  isReceivingDocCategory,
+  RECEIVING_REQUIRED_DOC,
 } from "../utils/outwardWorkflow.js";
 
 const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "Dispatch photo"];
@@ -547,7 +551,7 @@ export async function updateOutward(req, res) {
         shipToContactPerson: true, shipToContactNo: true, shipToLocation: true,
         billToContactPerson: true, billToContactNo: true, billToEmail: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
-        dispatchMode: true, vehicleNumber: true, remarks: true,
+        dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, remarks: true,
         items: true,
       },
     });
@@ -597,6 +601,8 @@ export async function updateOutward(req, res) {
     if (isAdmin && existing.status === STATUS.DISPATCHED && data.dispatch) {
       const d = data.dispatch;
       if (!d.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
+      const adminDriverProblem = validateDriver(d);
+      if (adminDriverProblem) return res.status(422).json({ message: adminDriverProblem });
       const refs = (Array.isArray(d.referenceDocuments) ? d.referenceDocuments : [])
         .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
         .map((r) => ({
@@ -614,6 +620,8 @@ export async function updateOutward(req, res) {
           ewayBillNumber: refs[0].ewayBillNumber,
           dispatchMode: d.dispatchMode,
           vehicleNumber: d.vehicleNumber?.trim() || null,
+          driverName: d.driverName?.trim() || null,
+          driverContact: d.driverContact?.trim() || null,
           remarks: d.remarks?.trim() || null,
         },
       };
@@ -690,7 +698,7 @@ export async function updateOutward(req, res) {
       };
       const entries = [];
       if (dispatchUpdate) {
-        const dispatchChanges = diffFields(existing, dispatchUpdate.snapshot, ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "remarks"]);
+        const dispatchChanges = diffFields(existing, dispatchUpdate.snapshot, ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "remarks"]);
         for (const c of dispatchChanges) {
           entries.push({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c });
         }
@@ -894,7 +902,7 @@ export async function dispatchOutward(req, res) {
       select: {
         id: true, warehouseId: true, outwardNumber: true, status: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
-        dispatchMode: true, vehicleNumber: true, remarks: true,
+        dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, remarks: true,
       },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
@@ -909,6 +917,8 @@ export async function dispatchOutward(req, res) {
     }
 
     if (!data.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
+    const driverProblem = validateDriver(data);
+    if (driverProblem) return res.status(422).json({ message: driverProblem });
     // Invoice / E-way bill references belong to the account team; the dispatch side only has
     // delivery challan, return note and other. Account's rows are never touched here.
     const normalizedRefs = references
@@ -931,10 +941,12 @@ export async function dispatchOutward(req, res) {
       refDocNumber: normalizedRefs[0].refDocNumber,
       dispatchMode: data.dispatchMode,
       vehicleNumber: data.vehicleNumber?.trim() || null,
+      driverName: data.driverName?.trim() || null,
+      driverContact: data.driverContact?.trim() || null,
       remarks: data.remarks?.trim() || null,
     };
     const changes = existing.status === STATUS.DISPATCHED
-      ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "dispatchMode", "vehicleNumber", "remarks"])
+      ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "remarks"])
       : [];
 
     // Files go to storage first (in parallel); the database write below then saves the dispatch
@@ -1002,6 +1014,130 @@ export async function dispatchOutward(req, res) {
   } catch (error) {
     console.error("Dispatch outward error:", error);
     return res.status(error.status || 500).json({ message: error.message || "Failed to save dispatch details" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RECEIVING  (Warehouse manager, Super admin) - after the entry is dispatched
+// Receiving date, receiver name / contact, remarks and the receiving documents (receiving copy, photo ...).
+// Same request shape as dispatch: JSON, or multipart (payload + files + categories). Can be saved again to correct it.
+// ---------------------------------------------------------------------------
+export async function saveReceiving(req, res) {
+  try {
+    const { id } = req.params;
+    let data = req.body || {};
+    let categories = [];
+    if (typeof data.payload === "string") {
+      try {
+        categories = JSON.parse(data.categories || "[]");
+        data = JSON.parse(data.payload);
+      } catch {
+        return res.status(422).json({ message: "Invalid receiving data" });
+      }
+    }
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length && files.length !== categories.length) return res.status(422).json({ message: "Each document needs a name" });
+    // Receiving files always live under a "Receiving ..." name, so they never mix with dispatch / account documents.
+    if (categories.some((c) => !isReceivingDocCategory(c))) {
+      return res.status(422).json({ message: "Receiving documents must be named Receiving ..." });
+    }
+
+    const existing = await prisma.min.findUnique({
+      where: { id },
+      select: {
+        id: true, warehouseId: true, outwardNumber: true, status: true, dispatchedAt: true, refDocDate: true,
+        receivedAt: true, receivedDate: true, receiverName: true, receiverContact: true, receivingRemarks: true,
+      },
+    });
+    if (!existing) return res.status(404).json({ message: "Outward entry not found" });
+
+    await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
+    if (existing.status !== STATUS.DISPATCHED) {
+      return res.status(409).json({ message: "Receiving details can be added only after the entry is dispatched" });
+    }
+
+    const problem = validateReceiving(data, existing.refDocDate || existing.dispatchedAt);
+    if (problem) return res.status(422).json({ message: problem });
+
+    // A receiving copy is compulsory: either one is already saved, or one is sent with this request.
+    const savedDocs = await prisma.document.findMany({
+      where: { linkedType: "outward", linkedId: id },
+      select: { id: true, fileKey: true, docCategory: true },
+    });
+    const lower = (v) => String(v || "").trim().toLowerCase();
+    const hasCopy =
+      savedDocs.some((d) => lower(d.docCategory).startsWith(lower(RECEIVING_REQUIRED_DOC))) ||
+      categories.some((c) => lower(c).startsWith(lower(RECEIVING_REQUIRED_DOC)));
+    if (!hasCopy) return res.status(422).json({ message: `${RECEIVING_REQUIRED_DOC} (document) is required` });
+
+    const snapshot = {
+      receivedDate: new Date(data.receivedDate),
+      receiverName: String(data.receiverName).trim(),
+      receiverContact: String(data.receiverContact).trim(),
+      receivingRemarks: data.receivingRemarks?.trim() || null,
+    };
+    const isFirstTime = !existing.receivedAt && !existing.receivedDate;
+    const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+    const changes = isFirstTime
+      ? []
+      : diffFields(
+          { ...existing, receivedDate: day(existing.receivedDate) },
+          { ...snapshot, receivedDate: day(snapshot.receivedDate) },
+          ["receivedDate", "receiverName", "receiverContact", "receivingRemarks"]
+        );
+
+    const uploaded = files.length ? await storeOutwardFiles(files, categories, existing.outwardNumber) : [];
+    let replaced = [];
+    try {
+      await prisma.$transaction(async (tx) => {
+        const { count } = await tx.min.updateMany({
+          where: { id, status: STATUS.DISPATCHED },
+          data: {
+            ...snapshot,
+            ...(isFirstTime ? { receivedById: req.user.id, receivedByName: req.user.name, receivedAt: new Date() } : {}),
+          },
+        });
+        if (!count) throw httpError(409, "Receiving details can be added only after the entry is dispatched");
+
+        if (uploaded.length) {
+          // A new file for a document that already exists replaces it.
+          const names = new Set(uploaded.map((u) => u.docCategory.trim().toLowerCase()));
+          replaced = savedDocs.filter((d) => names.has(lower(d.docCategory)));
+          if (replaced.length) await tx.document.deleteMany({ where: { id: { in: replaced.map((d) => d.id) } } });
+          await tx.document.createMany({
+            data: uploaded.map((u) => ({
+              linkedType: "outward", linkedId: id, docCategory: u.docCategory,
+              fileKey: u.fileKey, fileType: u.fileType, fileSize: u.fileSize, uploadedById: req.user.id,
+            })),
+          });
+        }
+      });
+    } catch (txError) {
+      if (uploaded.length) await supabase.storage.from(SUPABASE_BUCKET).remove(uploaded.map((u) => u.fileKey)).catch(() => {});
+      throw txError;
+    }
+    if (replaced.length) {
+      const { error: cleanupError } = await supabase.storage.from(SUPABASE_BUCKET).remove(replaced.map((d) => d.fileKey));
+      if (cleanupError) console.error("Old receiving document cleanup failed:", cleanupError.message);
+    }
+
+    const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
+    const entries = isFirstTime
+      ? [{ ...base, action: "RECEIVED", description: `Received by ${snapshot.receiverName} on ${day(snapshot.receivedDate)}` }]
+      : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
+    for (const u of uploaded) {
+      entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
+    }
+    if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (receiving) failed:", err));
+
+    const [result, documents] = await Promise.all([
+      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
+      prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
+    ]);
+    return res.json({ message: "Receiving details saved", data: finishFor(req, result, documents) });
+  } catch (error) {
+    console.error("Save receiving error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to save receiving details" });
   }
 }
 

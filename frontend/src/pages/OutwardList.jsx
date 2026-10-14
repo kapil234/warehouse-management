@@ -25,7 +25,7 @@ import {
   selectOutwardHistory,
   selectOutwardHistoryStatus,
 } from "../features/outward/outwardSlice";
-import { formatOutwardEntry, WORKFLOW_STATUS, DISPATCH_STATE, formatMoney } from "../features/outward/outwardHelpers";
+import { formatOutwardEntry, getStatusStyle, formatMoney } from "../features/outward/outwardHelpers";
 import HistoryPanel from "../features/shared/HistoryPanel";
 
 const filters = ["All types", "Sales", "Service", "Returns", "Damage/Scrap"];
@@ -97,31 +97,10 @@ function formatDateRangeLabel({ preset, from, to }) {
   return `${formatShortDate(from)} \u2013 ${formatShortDate(to)}`;
 }
 
-function StatusBadge({ status, statusType, pendingDocuments = 0 }) {
-  const styles = {
-    complete: "bg-green-100 text-green-700",
-    pending: "bg-amber-100 text-amber-700",
-    missing: "bg-red-100 text-red-600",
-  };
-
-  const label =
-    statusType === "pending" && pendingDocuments > 0
-      ? `${status} (${pendingDocuments} ${pendingDocuments === 1 ? "doc" : "docs"})`
-      : status;
-
-  return (
-    <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ${styles[statusType] || styles.complete}`}>
-      {label}
-    </span>
-  );
-}
-
 // Workflow status of an entry. Warehouse managers only ever get
 // "Pending" / "Dispatched" (never the approval side), everyone else the full status.
 function WorkflowBadge({ item }) {
-  const style = item.workflowStatus
-    ? WORKFLOW_STATUS[item.workflowStatus]
-    : DISPATCH_STATE[item.dispatchState];
+  const style = getStatusStyle(item);
   if (!style) return null;
   return (
     <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-semibold ${style.cls}`}>
@@ -273,7 +252,7 @@ function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
 
             <div className="flex items-center gap-2 px-1">
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">From</label>
+                <label className="mb-1 block text-xs font-semibold text-black">From</label>
                 <input
                   type="date"
                   value={draftFrom}
@@ -283,7 +262,7 @@ function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
                 />
               </div>
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">To</label>
+                <label className="mb-1 block text-xs font-semibold text-black">To</label>
                 <input
                   type="date"
                   value={draftTo}
@@ -620,9 +599,6 @@ export default function Outward() {
                       <td className="px-5 py-4">
                         <div className="flex flex-col items-start gap-1">
                           <WorkflowBadge item={item} />
-                          {isWarehouseRole && item.dispatchState === "Dispatched" && (
-                            <StatusBadge status={item.status} statusType={item.statusType} pendingDocuments={item.pendingDocuments} />
-                          )}
                         </div>
                       </td>
                       <td className="px-5 py-4 text-right">

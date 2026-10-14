@@ -70,7 +70,7 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} noValidate>
           <div className="mb-4">
-            <label htmlFor="email" className="block text-sm text-gray-600 mb-1">
+            <label htmlFor="email" className="block text-sm font-semibold text-black mb-1">
               Email
             </label>
             <input
@@ -89,7 +89,7 @@ export default function Login() {
           </div>
 
           <div className="mb-2">
-            <label htmlFor="password" className="block text-sm text-gray-600 mb-1">
+            <label htmlFor="password" className="block text-sm font-semibold text-black mb-1">
               Password
             </label>
             <div className="relative">

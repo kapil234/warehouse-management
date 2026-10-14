@@ -18,6 +18,7 @@ import { getWarehousePermissions } from "../features/warehouse/warehousePermissi
 import { fetchCompanies, selectAllCompanies } from "../features/company/companySlice";
 import {
   COST_STATUS_OPTIONS,
+  REQUIRED_DOCUMENTS,
   isPlaceholder,
   ACCOUNT_REF_TYPES,
   MANAGER_REF_TYPES,
@@ -155,6 +156,8 @@ export default function OutwardForm() {
   const showDispatchSection = isEdit && isSuperAdmin && entryStatus === "DISPATCHED";
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [driverContact, setDriverContact] = useState("");
   const [dispatchRemarks, setDispatchRemarks] = useState("");
   const [accountRefs, setAccountRefs] = useState([newAccountRef()]);
   const [managerRefs, setManagerRefs] = useState([newManagerRef()]);
@@ -167,7 +170,7 @@ export default function OutwardForm() {
   const removeManagerRef = (rid) => setManagerRefs((p) => (p.length === 1 ? [newManagerRef()] : p.filter((r) => r.id !== rid)));
 
   const inputCls = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
-  const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
+  const labelCls = "block text-sm font-semibold text-black mb-1.5";
 
   // ---- Companies / warehouses this user can pick from ----------------------
   useEffect(() => {
@@ -274,6 +277,8 @@ export default function OutwardForm() {
       // Prefill what the warehouse already filled (vehicle, mode, reference documents, remarks).
       if (x.dispatchMode && !isPlaceholder(x.dispatchMode)) setDispatchMode(x.dispatchMode);
       setVehicleNumber(x.vehicleNumber || "");
+      setDriverName(x.driverName || "");
+      setDriverContact(x.driverContact || "");
       setDispatchRemarks(x.remarks || "");
       const savedRefs = Array.isArray(x.referenceDocuments) ? x.referenceDocuments : [];
       const toRow = (base, r) => ({
@@ -523,6 +528,8 @@ export default function OutwardForm() {
       payload.dispatch = {
         dispatchMode,
         vehicleNumber: vehicleNumber.trim() || undefined,
+        driverName: driverName.trim() || undefined,
+        driverContact: driverContact.trim() || undefined,
         remarks: dispatchRemarks.trim() || undefined,
         referenceDocuments: refs,
       };
@@ -727,7 +734,7 @@ export default function OutwardForm() {
                 return (
                   <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                     <div className="mb-3 flex items-center justify-between">
-                      <span className="text-xs font-medium text-gray-500">Item {index + 1}</span>
+                      <span className="text-sm font-semibold text-black">Item {index + 1}</span>
                       {items.length > 1 && <button type="button" onClick={() => removeItem(item.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Delete item</button>}
                     </div>
 
@@ -832,7 +839,7 @@ export default function OutwardForm() {
                     <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                       {accountRefs.length > 1 && (
                         <div className="mb-3 flex items-center justify-between">
-                          <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
+                          <span className="text-sm font-semibold text-black">Reference document {index + 1}</span>
                           <button type="button" onClick={() => removeAccountRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                         </div>
                       )}
@@ -883,6 +890,8 @@ export default function OutwardForm() {
                     </div>
                   </div>
                   <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
                 </div>
 
                 <div className="mt-5 flex items-center justify-between">
@@ -894,7 +903,7 @@ export default function OutwardForm() {
                     <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                       {managerRefs.length > 1 && (
                         <div className="mb-3 flex items-center justify-between">
-                          <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
+                          <span className="text-sm font-semibold text-black">Reference document {index + 1}</span>
                           <button type="button" onClick={() => removeManagerRef(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                         </div>
                       )}
@@ -919,6 +928,10 @@ export default function OutwardForm() {
                 outwardId={editId}
                 documents={(currentOutward?.documents || []).filter((d) => !isAccountDocCategory(d.docCategory))}
                 canManage
+                requiredDocuments={[]}
+                showSummary={false}
+                optionalDocuments={[...new Set(managerRefs.map((r) => refTypeDocument(r.refDocType)).filter(Boolean))]}
+                addMenuTypes={[...REQUIRED_DOCUMENTS, "Bilty", "Return note", "Other"]}
                 title="Dispatch documents"
               />
 

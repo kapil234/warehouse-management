@@ -166,7 +166,7 @@ export default function StockLedger() {
 
         <div className="mb-6 grid grid-cols-1 items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:grid-cols-[1fr_1fr_auto]">
           <div>
-            <label className="mb-1.5 block text-[11px] font-medium text-gray-500">Company</label>
+            <label className="mb-1.5 block text-sm font-semibold text-black">Company</label>
             <div className="relative">
               <select value={companyId} onChange={(e) => handleCompanyChange(e.target.value)} className={selectCls}>
                 <option value="">All companies</option>
@@ -179,7 +179,7 @@ export default function StockLedger() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-[11px] font-medium text-gray-500">Warehouse</label>
+            <label className="mb-1.5 block text-sm font-semibold text-black">Warehouse</label>
             <div className="relative">
               <select
                 value={warehouseId}

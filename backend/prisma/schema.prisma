@@ -233,6 +233,19 @@ model Min {
   dispatchMode  String?
   vehicleNumber String?
   remarks       String?
+   // Dispatch details (warehouse manager)
+  driverName    String?
+  driverContact String?
+
+  // Receiving details (warehouse manager, after dispatch)
+  receivedDate     DateTime?   // receiving date picked from the calendar
+  receiverName     String?
+  receiverContact  String?
+  receivingRemarks String?
+  receivedById     String?
+  receivedByName   String?
+  receivedAt       DateTime?   // when the receiving form was first saved (null = receiving still pending)
+
 
   warehouseId String
   warehouse   Warehouse @relation(fields: [warehouseId], references: [id])

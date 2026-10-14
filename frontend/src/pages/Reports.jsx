@@ -204,7 +204,7 @@ function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
             </p>
             <div className="flex items-center gap-2 px-1">
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">From</label>
+                <label className="mb-1 block text-xs font-semibold text-black">From</label>
                 <input
                   type="date"
                   value={draftFrom}
@@ -214,7 +214,7 @@ function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
                 />
               </div>
               <div className="flex-1">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">To</label>
+                <label className="mb-1 block text-xs font-semibold text-black">To</label>
                 <input
                   type="date"
                   value={draftTo}

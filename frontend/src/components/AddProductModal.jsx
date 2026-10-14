@@ -118,7 +118,7 @@ export default function AddProductModal({
 
         <div className="space-y-4 p-5">
           <label className="block">
-            <span className="mb-1 block text-sm text-gray-500">
+            <span className="mb-1 block text-sm font-semibold text-black">
               Item category
             </span>
             <input
@@ -142,7 +142,7 @@ export default function AddProductModal({
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-gray-500">
+            <span className="mb-1 block text-sm font-semibold text-black">
               SKU / Model
             </span>
             <input

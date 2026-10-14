@@ -30,12 +30,13 @@ import {
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
 import {
-  REQUIRED_DOCUMENTS,
-  WORKFLOW_STATUS,
-  DISPATCH_STATE,
+  getStatusStyle,
   paymentStatusLabel,
   formatMoney,
   isPlaceholder,
+  isReceived,
+  isReceivingDocCategory,
+  refTypeDocument,
   ACCOUNT_EDIT_STATUSES,
   isAccountDocCategory,
   refTypeLabel,
@@ -109,6 +110,11 @@ export default function OutwardDetail() {
       // Super admin: after approving, go straight on to the dispatch details.
       if (decision === "approve" && isSuperAdmin) {
         navigate(`/outward/${id}/dispatch`, { replace: true });
+        return;
+      }
+      // Account: after approve / hold / reject go back to the outward list.
+      if (isAccount) {
+        navigate("/outward", { replace: true });
         return;
       }
       dispatch(fetchOutwardById(id));
@@ -196,40 +202,18 @@ export default function OutwardDetail() {
   // Sales / Account only see their own part, never the documents or dispatch details.
   const showDocuments = docsStage && (isSuperAdmin || isWarehouse);
   const showDispatchInfo = isWarehouse || (isSuperAdmin && dispatched);
-  const statusStyle = isWarehouse ? DISPATCH_STATE[outward.dispatchState] : WORKFLOW_STATUS[workflow];
+  const received = isReceived(outward);
+  const statusStyle = getStatusStyle(outward);
 
-  const uploadedCategories = documents.map((doc) => String(doc.docCategory || "").trim().toLowerCase());
-  const allDocumentsUploaded = REQUIRED_DOCUMENTS.every((requiredDocument) => {
-    const required = requiredDocument.toLowerCase();
-    return uploadedCategories.some((value) => value === required || value.startsWith(`${required} #`) || value.startsWith(`${required} `));
-  });
-
-  const currentStatus = allDocumentsUploaded ? "Complete" : "Pending";
-
-  // One unified list of document rows: the three required types always
-  // appear first (uploaded or not), followed by anything else that's
-  // been uploaded (duplicates of a required type, or custom "Other"
-  // documents) — all rendered with the exact same row layout, so there's
-  // no separate "Additional documents" section.
-  const requiredLower = REQUIRED_DOCUMENTS.map((label) => label.toLowerCase());
-  const extraDocuments = documents.filter(
-    (doc) => !requiredLower.includes(String(doc.docCategory || "").trim().toLowerCase())
-  );
-
-  const documentRows = [
-    ...REQUIRED_DOCUMENTS.map((label) => ({
-      key: label,
-      label,
-      document: documents.find((doc) => String(doc.docCategory || "").trim().toLowerCase() === label.toLowerCase()),
-      required: true,
-    })),
-    ...extraDocuments.map((doc) => ({
-      key: doc.id,
-      label: doc.docCategory || "Document",
-      document: doc,
-      required: false,
-    })),
-  ];
+  // Documents shown = what is already uploaded (Account team / warehouse manager) plus one
+  // (optional) row for each document type picked in the reference documents. No fixed rows.
+  const documentRows = documents.map((doc) => ({
+    key: doc.id,
+    label: doc.docCategory || "Document",
+    document: doc,
+    required: false,
+  }));
+  const currentStatus = isReceived(outward) ? "Receiving completed" : "Receiving pending";
 
   // One row per reference document added on the form (invoice, e-way
   // bill, etc). Older records without a referenceDocuments array fall
@@ -240,6 +224,17 @@ export default function OutwardDetail() {
       : !isPlaceholder(outward.refDocNumber)
       ? [{ id: "ref-1", refDocType: outward.refDocType, refDocNumber: outward.refDocNumber, ewayBillNumber: outward.ewayBillNumber }]
       : [];
+
+  // An uploaded receiving copy / photo is listed under the reference documents too.
+  const receivingReferenceRows = documents
+    .filter((doc) => isReceivingDocCategory(doc.docCategory))
+    .map((doc) => ({ id: `recv-${doc.id}`, refDocType: doc.docCategory, refDocNumber: "" }));
+  const referenceTableRows = [...referenceDocumentRows, ...receivingReferenceRows];
+
+  // Upload rows offered for the reference document types that were selected.
+  const documentSlots = [
+    ...new Set(referenceDocumentRows.map((ref) => refTypeDocument(ref.refDocType)).filter(Boolean)),
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -271,11 +266,16 @@ export default function OutwardDetail() {
                   <Truck size={15} /> {dispatched ? "Update dispatch details" : "Fill dispatch details"}
                 </Link>
               )}
+              {dispatched && (isSuperAdmin || isWarehouse) && (
+                <Link to={`/outward/${id}/receiving`} className="flex items-center gap-1.5 rounded-lg border border-gray-900 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50 sm:text-sm">
+                  <Calendar size={15} /> {received ? "Update receiving details" : "Fill receiving details"}
+                </Link>
+              )}
               {canEdit && (
                 <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
               )}
               {/* Download: only once the entry is fully dispatched, and only for the admin / warehouse manager. Sales and Account never get it. */}
-              {dispatched && (isSuperAdmin || isWarehouse) && (
+              {dispatched && received && (isSuperAdmin || isWarehouse) && (
                 <button type="button" onClick={() => downloadOutwardPdf(outward, items, docsStage && showDocuments ? documentRows : [], currentStatus, { includeDispatch: showDispatchInfo || showDocuments, includeCost: showCost })} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /> Download</button>
               )}
             </div>
@@ -328,6 +328,8 @@ export default function OutwardDetail() {
               <>
                 <Info icon={<Route size={18} />} label="Dispatch Mode" value={isPlaceholder(outward.dispatchMode) ? "-" : outward.dispatchMode} />
                 <Info icon={<Truck size={18} />} label="Vehicle / AWB Number" value={outward.vehicleNumber || "-"} />
+                <Info icon={<User size={18} />} label="Driver Name" value={outward.driverName || "-"} />
+                <Info label="Driver Contact" value={outward.driverContact || "-"} />
               </>
             )}
             <Info label="Created By" value={outward.createdBy?.name || outward.createdBy?.email || "-"} />
@@ -340,29 +342,25 @@ export default function OutwardDetail() {
               existed. */}
           {showDispatchInfo && (
           <div className="mt-5 pt-5 border-t">
-            <p className="text-sm font-medium text-gray-700 mb-3">Reference Documents</p>
+            <p className="text-sm font-semibold text-black mb-3">Reference Documents</p>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-[11px] sm:text-sm">
                 <thead>
                   <tr className="border-b bg-gray-50 text-left text-gray-500">
                     <th className="py-2 px-3">Document Type</th>
                     <th className="py-2 px-3">Reference No.</th>
-                    <th className="py-2 px-3">Vehicle No.</th>
-                    <th className="py-2 px-3">E-way Bill No.</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {referenceDocumentRows.map((ref, index) => (
+                  {referenceTableRows.map((ref, index) => (
                     <tr key={ref.id || index} className="border-b last:border-0">
                       <td className="py-2 px-3">{refTypeLabel(ref.refDocType) || "-"}</td>
                       <td className="py-2 px-3">{ref.refDocNumber || "-"}</td>
-                      <td className="py-2 px-3">{ref.vehicleNumber || "-"}</td>
-                      <td className="py-2 px-3">{ref.ewayBillNumber || "-"}</td>
                     </tr>
                   ))}
-                  {referenceDocumentRows.length === 0 && (
+                  {referenceTableRows.length === 0 && (
                     <tr>
-                      <td colSpan="4" className="text-center py-4 text-gray-500">
+                      <td colSpan="2" className="text-center py-4 text-gray-500">
                         No reference documents
                       </td>
                     </tr>
@@ -373,6 +371,20 @@ export default function OutwardDetail() {
           </div>
           )}
         </div>
+
+        {/* Receiving details - shown only once the warehouse manager has filled them. */}
+        {dispatched && showDispatchInfo && received && (
+          <div className="rounded-xl border bg-white p-4 sm:p-6">
+            <h2 className="mb-4 text-base font-semibold text-gray-900 sm:text-lg">Receiving</h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5">
+              <Info icon={<Calendar size={18} />} label="Receiving Date" value={outward.receivedDate ? new Date(outward.receivedDate).toLocaleDateString("en-IN") : "-"} />
+              <Info icon={<User size={18} />} label="Receiver Name" value={outward.receiverName || "-"} />
+              <Info label="Receiver Contact" value={outward.receiverContact || "-"} />
+              <Info label="Receiving Remarks" value={outward.receivingRemarks || "-"} />
+              {outward.receivedByName && <Info label="Recorded By" value={outward.receivedByName} />}
+            </div>
+          </div>
+        )}
 
         {/* Approval details - Sales / Account / Super admin only. Never sent to the warehouse. */}
         {showCost && (workflow === "REJECTED" || workflow === "ON_HOLD" || outward.approvedByName || dispatched) && (
@@ -484,6 +496,9 @@ export default function OutwardDetail() {
             outwardId={id}
             documents={documents}
             canManage={canManageDocs}
+            requiredDocuments={[]}
+            optionalDocuments={documentSlots}
+            showSummary={false}
             // Invoice / e-way bill belong to the account team: the manager only downloads them.
             isLocked={(category) => isWarehouse && isAccountDocCategory(category)}
           />
@@ -505,7 +520,7 @@ export default function OutwardDetail() {
                 ? "It stays with Account and is not sent to the warehouse. You can approve or reject it later."
                 : "It goes back to Sales, who can fix the details and send it again."}
             </p>
-            <label className="mt-4 mb-1.5 block text-xs font-medium text-gray-500">
+            <label className="mt-4 mb-1.5 block text-sm font-semibold text-black">
               {decision === "approve" ? "Remarks (optional)" : decision === "hold" ? "Reason for holding" : "Reason for rejecting"}
             </label>
             <textarea

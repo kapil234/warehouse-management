@@ -281,6 +281,30 @@ export const dispatchOutward = createAsyncThunk(
   }
 );
 
+// Warehouse manager: receiving details (date, receiver, remarks) together with the picked receiving documents.
+export const saveOutwardReceiving = createAsyncThunk(
+  "outward/saveReceiving",
+  async ({ id, payload, files = [] }, { rejectWithValue }) => {
+    try {
+      if (!files.length) {
+        const { data } = await apiClient.put(`/api/outward/${id}/receiving`, payload);
+        return data;
+      }
+      const formData = new FormData();
+      formData.append("payload", JSON.stringify(payload));
+      formData.append("categories", JSON.stringify(files.map((f) => f.docCategory)));
+      files.forEach((f) => formData.append("files", f.file));
+      const { data } = await apiClient.put(`/api/outward/${id}/receiving`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000,
+      });
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to save receiving details");
+    }
+  }
+);
+
 // Account: saves its own reference documents (invoice / e-way bill / other) together with any picked files.
 export const saveAccountDocuments = createAsyncThunk(
   "outward/saveAccountDocuments",
@@ -534,6 +558,12 @@ const outwardSlice = createSlice({
         if (state.current && state.current.id === action.meta.arg.id) {
           state.current.workflowStatus = "ON_HOLD";
         }
+      })
+
+      // Receiving details saved: the response is the refreshed entry.
+      .addCase(saveOutwardReceiving.fulfilled, (state, action) => {
+        const entry = action.payload?.data;
+        if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
       })
 
       // Account saved its reference documents / files: the response is the refreshed entry.

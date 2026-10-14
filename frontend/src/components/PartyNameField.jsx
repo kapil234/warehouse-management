@@ -42,7 +42,7 @@ export default function PartyNameField({
   defaultOptions = ["Sungrow", "Saatvik", "Lapp"],
   inputCls,
   label = "Supplier / Customer name",
-  labelCls = "block text-xs font-medium text-gray-500 mb-1.5",
+  labelCls = "block text-sm font-semibold text-black mb-1.5",
   placeholder = "Select or type a name",
 }) {
   const [options, setOptions] = useState(() => readStoredOptions(storageKey, defaultOptions));

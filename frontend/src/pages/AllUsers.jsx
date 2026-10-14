@@ -521,7 +521,7 @@ function Field({ label, value, onChange, type = "text", disabled = false }) {
 
   return (
     <label className="block">
-      <span className="mb-1 block text-sm text-gray-500">{label}</span>
+      <span className="mb-1 block text-sm font-semibold text-black">{label}</span>
       <div className="relative">
         <input
           type={isPassword && showPassword ? "text" : type}

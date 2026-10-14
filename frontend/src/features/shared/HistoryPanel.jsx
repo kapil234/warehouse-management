@@ -20,6 +20,7 @@ const ACTION_STYLES = {
   ON_HOLD: "bg-purple-100 text-purple-700",
   COST_UPDATED: "bg-blue-100 text-blue-700",
   DISPATCHED: "bg-green-100 text-green-700",
+  RECEIVED: "bg-green-100 text-green-700",
 };
 
 const ACTION_LABELS = {
@@ -38,6 +39,7 @@ const ACTION_LABELS = {
   ON_HOLD: "On hold",
   COST_UPDATED: "Cost updated",
   DISPATCHED: "Dispatched",
+  RECEIVED: "Received",
 };
 
 // An entry carries an explicit "before / after" only when its

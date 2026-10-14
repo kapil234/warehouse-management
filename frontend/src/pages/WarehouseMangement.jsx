@@ -723,7 +723,7 @@ export default function WarehouseManagement() {
 
             {isSuper && (
               <label className="block">
-                <span className="mb-1 block text-sm text-gray-500">
+                <span className="mb-1 block text-sm font-semibold text-black">
                   Company
                 </span>
 
@@ -905,7 +905,7 @@ export default function WarehouseManagement() {
                 ].map(([key, label]) => (
                   <label
                     key={key}
-                    className="inline-flex items-center gap-2 text-xs text-gray-600"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-black"
                   >
                     <input
                       type="checkbox"
@@ -1094,7 +1094,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm text-gray-500">
+      <span className="mb-1 block text-sm font-semibold text-black">
         {label}
       </span>
 

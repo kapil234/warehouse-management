@@ -206,7 +206,7 @@ export default function Signup() {
           </div>
 
           <label className="block">
-            <span className="block text-sm font-medium text-gray-600 mb-1.5">Role</span>
+            <span className="block text-sm font-semibold text-black mb-1.5">Role</span>
             <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500">
               {availableRoles.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
@@ -238,7 +238,7 @@ export default function Signup() {
                         const selected = Boolean(warehouseAccess[warehouse.id]);
                         return <div key={warehouse.id} className="rounded-xl border border-gray-200 p-3">
                           <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={selected} onChange={() => toggleWarehouse(warehouse.id)} className="h-4 w-4" /><span className="text-sm font-medium text-gray-800">{warehouse.name}</span><span className="text-xs text-gray-500">{warehouse.code} • {warehouse.city}</span></label>
-                          {selected && <div className="mt-3 ml-7 flex flex-wrap gap-3">{[["canInward","Inward"],["canOutward","Outward"],["canManageDocuments","Documents"]].map(([key,label]) => <label key={key} className="inline-flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={Boolean(warehouseAccess[warehouse.id]?.[key])} onChange={() => updatePermission(warehouse.id,key)} />{label}</label>)}</div>}
+                          {selected && <div className="mt-3 ml-7 flex flex-wrap gap-3">{[["canInward","Inward"],["canOutward","Outward"],["canManageDocuments","Documents"]].map(([key,label]) => <label key={key} className="inline-flex items-center gap-1.5 text-sm font-medium text-black"><input type="checkbox" checked={Boolean(warehouseAccess[warehouse.id]?.[key])} onChange={() => updatePermission(warehouse.id,key)} />{label}</label>)}</div>}
                         </div>;
                       })}
                     </div>
@@ -264,7 +264,7 @@ function Field({ label, value, onChange, type = "text", placeholder, error }) {
 
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-gray-600 mb-1.5">{label}</span>
+      <span className="block text-sm font-semibold text-black mb-1.5">{label}</span>
       <div className="relative">
         <input
           type={isPassword && showPassword ? "text" : type}

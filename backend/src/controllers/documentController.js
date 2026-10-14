@@ -97,6 +97,8 @@ export function sanitizeCategory(value) {
 }
 function baseName(category) {
   const c = category.toLowerCase();
+  if (c.includes("receiving")) return "receiving";
+  if (c.includes("bilty")) return "bilty";
   if (c.includes("invoice")) return "invoice";
   if (c.includes("e-way") || c.includes("eway")) return "eway-bill";
   if (c.includes("challan")) return "delivery-challan";

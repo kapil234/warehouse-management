@@ -8,6 +8,7 @@ import {
   rejectOutward,
   holdOutward,
   dispatchOutward,
+  saveReceiving,
   saveAccountDocuments,
   downloadItemProof,
   downloadPiFile,
@@ -29,7 +30,8 @@ import { upload } from "../middleware/uploadMiddleware.js";
  *   SALES              creates / edits (PI details + payment status, UTR / proof)  -> PENDING_APPROVAL
  *   ACCOUNT            approves, holds or rejects the entry  -> PENDING_DISPATCH / ON_HOLD / REJECTED
  *   ACCOUNT            also adds invoice / e-way bill / other reference documents + files (before dispatch)
- *   WAREHOUSE_MANAGER  fills the dispatch details            -> DISPATCHED
+ *   WAREHOUSE_MANAGER  fills the dispatch details (driver, vehicle, references)  -> DISPATCHED
+ *   WAREHOUSE_MANAGER  then fills the receiving details (date, receiver, receiving copy)
  *   SUPER_ADMIN        can do every step
  *
  * Warehouse / company scoping is done inside the controller
@@ -65,6 +67,9 @@ router.post("/:id/hold", authorize("SUPER_ADMIN", "ACCOUNT"), holdOutward);
 // Warehouse manager fills vehicle / dispatch details.
 // Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.
 router.put("/:id/dispatch", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.array("files", 10), dispatchOutward);
+
+// Warehouse manager fills the receiving details (date, receiver, receiving copy ...) once the entry is dispatched.
+router.put("/:id/receiving", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.array("files", 10), saveReceiving);
 
 // Account adds its own reference documents (invoice / e-way bill / other) and files before dispatch.
 router.put("/:id/account-documents", authorize("SUPER_ADMIN", "ACCOUNT"), upload.array("files", 10), saveAccountDocuments);

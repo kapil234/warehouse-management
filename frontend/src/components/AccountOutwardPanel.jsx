@@ -86,7 +86,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
 
   const dirty = editable && (stagedDocs.length > 0 || signature(references) !== serverSignature);
   const inputCls = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
-  const labelCls = "block text-xs font-medium text-gray-500 mb-1.5";
+  const labelCls = "block text-sm font-semibold text-black mb-1.5";
 
   const updateReference = (rid, field, value) => setReferences((p) => p.map((r) => (r.id === rid ? { ...r, [field]: value } : r)));
   const addReference = () => setReferences((p) => [...p, newReference()]);
@@ -226,7 +226,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
             <div key={r.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
               {references.length > 1 && (
                 <div className="mb-3 flex items-center justify-between">
-                  <span className="text-xs font-medium text-gray-500">Reference document {index + 1}</span>
+                  <span className="text-sm font-semibold text-black">Reference document {index + 1}</span>
                   <button type="button" onClick={() => removeReference(r.id)} className="flex items-center gap-1 text-xs text-red-500"><Trash2 size={13} />Remove</button>
                 </div>
               )}
