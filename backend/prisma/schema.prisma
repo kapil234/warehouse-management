@@ -256,6 +256,7 @@ model Min {
   createdAt DateTime @default(now())
 
   items              MinItem[]
+   serials MinSerial[]
   referenceDocuments MinReferenceDocument[]
   status          OutwardStatus @default(PENDING_APPROVAL)
 
@@ -401,4 +402,21 @@ model Product {
 
   @@unique([category, sku])
   @@index([category])
+}
+model MinSerial {
+  id String @id @default(uuid())
+
+  minId String
+  min   Min    @relation(fields: [minId], references: [id], onDelete: Cascade)
+
+  // Stored per category + SKU (not per MinItem row), because editing an entry rewrites its item rows.
+  category String
+  sku      String
+  serialNo String
+  source   String   @default("MANUAL") // MANUAL | CAMERA | SCANNER
+  createdAt DateTime @default(now())
+
+  @@unique([minId, serialNo])
+  @@index([serialNo])
+  @@index([minId, category, sku])
 }

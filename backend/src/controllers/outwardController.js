@@ -6,6 +6,7 @@ import { storeOutwardFiles } from "./documentController.js";
 import { outwardFolder } from "../utils/outwardWorkflow.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
 import { getWarehouseStock, findShortages, shortageMessage } from "../utils/stock.js";
+import { cleanSerials, validateSerials, findSerialConflict, replaceSerials, pruneSerials } from "../utils/serials.js";
 import {
   STATUS,
   SALES_EDITABLE_STATUSES,
@@ -246,6 +247,7 @@ export async function getOutwardById(req, res) {
       where: { id: req.params.id },
       include: {
         items: true,
+        serials: { orderBy: { createdAt: "asc" } },
         referenceDocuments: true,
         createdBy: { select: { name: true, email: true, role: true } },
         warehouse: { select: { id: true, name: true, code: true, companyId: true, Inward: true, Outward: true, company: { select: { name: true, status: true } } } },
@@ -691,6 +693,8 @@ export async function updateOutward(req, res) {
           ...(dispatchUpdate ? { referenceDocuments: { deleteMany: {}, create: dispatchUpdate.refs } } : {}),
         },
       });
+      // Item rows were rewritten: keep the serial numbers that still match, drop the rest.
+      const prunedSerials = await pruneSerials(tx, id, newItems);
 
       const base = {
         entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber,
@@ -726,6 +730,7 @@ export async function updateOutward(req, res) {
       if (wasRejected) entries.push({ ...base, action: "RESUBMITTED", description: "Resubmitted for account approval" });
       else if (wasOnHold) entries.push({ ...base, action: "RESUBMITTED", description: "Updated while on hold - sent for account approval again" });
       else if (wasApproved) entries.push({ ...base, action: "RESUBMITTED", description: "Updated after approval - sent for account approval again" });
+      if (prunedSerials) entries.push({ ...base, action: "SERIALS_UPDATED", description: `${prunedSerials} serial number(s) removed because the items changed` });
       if (!entries.length) entries.push({ ...base, action: "UPDATED", description: "Outward entry saved with no field changes" });
       await recordAuditLogs(tx, entries);
     }, STOCK_TRANSACTION_OPTIONS);
@@ -744,6 +749,7 @@ export async function updateOutward(req, res) {
       where: { id },
       include: {
         items: true,
+        serials: { orderBy: { createdAt: "asc" } },
         referenceDocuments: true,
         createdBy: { select: { name: true, email: true, role: true } },
         warehouse: { select: { id: true, name: true, code: true, companyId: true, Inward: true, Outward: true, company: { select: { name: true, status: true } } } },
@@ -903,6 +909,8 @@ export async function dispatchOutward(req, res) {
         id: true, warehouseId: true, outwardNumber: true, status: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
         dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, remarks: true,
+        items: { select: { category: true, sku: true, quantity: true, uom: true } },
+        _count: { select: { serials: true } },
       },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
@@ -934,6 +942,17 @@ export async function dispatchOutward(req, res) {
     }
     if (req.user.role !== "SUPER_ADMIN" && categories.some((c) => isAccountDocCategory(c))) {
       return res.status(422).json({ message: "Invoice and e-way bill documents are added by the account team" });
+    }
+
+    // Serial numbers: one for every Pcs unit. Entries dispatched before this feature (no serials saved yet)
+    // may be updated without them, but if serials are sent they must be complete.
+    const serials = cleanSerials(data.serials);
+    const legacyDispatched = existing.status === STATUS.DISPATCHED && existing._count.serials === 0 && serials.length === 0;
+    if (!legacyDispatched) {
+      const serialProblem = validateSerials(existing.items, serials);
+      if (serialProblem) return res.status(422).json({ message: serialProblem });
+      const serialConflict = await findSerialConflict(prisma, id, serials);
+      if (serialConflict) return res.status(422).json({ message: serialConflict });
     }
 
     const newSnapshot = {
@@ -972,6 +991,12 @@ export async function dispatchOutward(req, res) {
         });
         if (!count) throw httpError(409, "This entry is not ready for dispatch");
         await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: { NOT: { refDocType: { in: ACCOUNT_REF_TYPES } } }, create: normalizedRefs } } });
+        if (!legacyDispatched) {
+          // Re-check inside the transaction so two dispatches cannot take the same serial number.
+          const clash = await findSerialConflict(tx, id, serials);
+          if (clash) throw httpError(422, clash);
+          await replaceSerials(tx, id, serials);
+        }
 
         if (uploaded.length) {
           // A new file for a document that already exists replaces it.
@@ -1000,6 +1025,11 @@ export async function dispatchOutward(req, res) {
     const entries = existing.status === STATUS.PENDING_DISPATCH
       ? [{ ...base, action: "DISPATCHED", description: `Dispatched (${data.dispatchMode}${newSnapshot.vehicleNumber ? `, ${newSnapshot.vehicleNumber}` : ""})` }]
       : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
+    if (!legacyDispatched && serials.length) {
+      const via = { CAMERA: 0, SCANNER: 0, MANUAL: 0 };
+      serials.forEach((x) => { via[x.source] += 1; });
+      entries.push({ ...base, action: "SERIALS_UPDATED", description: `Serial numbers saved: ${serials.length} (camera ${via.CAMERA}, scanner ${via.SCANNER}, typed ${via.MANUAL})`, changes: { count: serials.length } });
+    }
     for (const u of uploaded) {
       entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
     }
@@ -1007,7 +1037,7 @@ export async function dispatchOutward(req, res) {
     if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (dispatch) failed:", err));
 
     const [result, documents] = await Promise.all([
-      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
+      prisma.min.findUnique({ where: { id }, include: { items: true, serials: { orderBy: { createdAt: "asc" } }, referenceDocuments: true } }),
       prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
     ]);
     return res.json({ message: "Dispatch details saved", data: finishFor(req, result, documents) });
