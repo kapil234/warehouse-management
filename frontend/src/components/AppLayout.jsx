@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
@@ -25,6 +25,28 @@ export default function AppLayout() {
   const navigate = useNavigate();
 
   const active = getActiveKey(location.pathname);
+  const mainRef = useRef(null);
+
+  // Tables marked "mobile-cards" turn into stacked cards on phones (see index.css);
+  // each cell gets its column heading as data-label so the card shows "Heading: value".
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return undefined;
+    const label = () => {
+      root.querySelectorAll("table.mobile-cards").forEach((table) => {
+        const heads = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent.trim());
+        table.querySelectorAll("tbody tr").forEach((tr) => {
+          Array.from(tr.children).forEach((td, i) => {
+            if (td.tagName === "TD" && !td.hasAttribute("colspan") && heads[i] && td.getAttribute("data-label") !== heads[i]) td.setAttribute("data-label", heads[i]);
+          });
+        });
+      });
+    };
+    label();
+    const observer = new MutationObserver(label);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
 
   // Once the shell is up and the browser is idle, download the pages people
   // open most so navigating to them doesn't wait on a network round-trip.
@@ -48,7 +70,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
+    <div className="h-dvh flex flex-col bg-gray-50">
       <Navbar location="Delhi Warehouse" />
 
       <div className="flex flex-1 overflow-hidden">
@@ -56,7 +78,7 @@ export default function AppLayout() {
 
         {/* pb-16 reserves space for Sidebar's mobile bottom bar;
             md:pb-0 because that bar is hidden at md+ (real sidebar shown instead) */}
-        <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
+        <main ref={mainRef} className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
           <Suspense fallback={<RouteFallback />}>
             <Outlet />
           </Suspense>

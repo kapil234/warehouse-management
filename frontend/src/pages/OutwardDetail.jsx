@@ -137,7 +137,7 @@ export default function OutwardDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-dvh bg-gray-50 flex items-center justify-center">
         <div className="flex items-center gap-3 text-gray-600">
           <Loader2 className="w-6 h-6 animate-spin" />
           Loading outward details...
@@ -150,7 +150,7 @@ export default function OutwardDetail() {
   // way (see the effect above). Show the same loader instead of flashing this page for a moment.
   if (isSuperAdmin && outward?.workflowStatus === "PENDING_DISPATCH") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
       </div>
     );
@@ -158,7 +158,7 @@ export default function OutwardDetail() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-dvh bg-gray-50 p-4 sm:p-6">
         <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-600 mb-6">
           <ArrowLeft size={20} />
           Back
@@ -237,7 +237,7 @@ export default function OutwardDetail() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-dvh bg-gray-50">
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 sm:py-5">
           <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-3 sm:gap-2 sm:text-base sm:mb-4">
@@ -245,43 +245,50 @@ export default function OutwardDetail() {
             Back
           </button>
 
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold text-gray-900 sm:text-2xl">Outward Details</h1>
-              <p className="text-xs text-gray-500 mt-0.5 sm:text-base sm:mt-1">{outward.outwardNumber || `Outward #${outward.id}`}</p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start justify-between gap-2 sm:block">
+              <div className="min-w-0">
+                <h1 className="text-base font-bold text-gray-900 sm:text-2xl">Outward Details</h1>
+                <p className="mt-0.5 break-all text-[11px] text-gray-500 sm:text-base sm:mt-1">{outward.outwardNumber || `Outward #${outward.id}`}</p>
+              </div>
+              {statusStyle && (
+                <span className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-[11px] font-medium sm:hidden ${statusStyle.cls}`}>
+                  {statusStyle.label}
+                </span>
+              )}
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end sm:gap-2">
               {canApprove && !showAccountPanel && (
-                <button type="button" onClick={() => openDecision("approve")} className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 sm:text-sm"><Check size={15} /> Approve</button>
+                <button type="button" onClick={() => openDecision("approve")} className="flex items-center gap-1.5 rounded-lg bg-green-600 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-white hover:bg-green-700 sm:text-sm"><Check size={15} /> Approve</button>
               )}
               {canHold && !showAccountPanel && (
-                <button type="button" onClick={() => openDecision("hold")} className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50 sm:text-sm"><Pause size={15} /> Hold</button>
+                <button type="button" onClick={() => openDecision("hold")} className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-white px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-purple-700 hover:bg-purple-50 sm:text-sm"><Pause size={15} /> Hold</button>
               )}
               {canReject && !showAccountPanel && (
-                <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
+                <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
               )}
               {canDispatch && (
-                <Link to={`/outward/${id}/dispatch`} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">
+                <Link to={`/outward/${id}/dispatch`} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-white hover:bg-black sm:text-sm">
                   <Truck size={15} /> {dispatched ? "Update dispatch details" : "Fill dispatch details"}
                 </Link>
               )}
               {dispatched && (isSuperAdmin || isWarehouse) && (
-                <Link to={`/outward/${id}/receiving`} className="flex items-center gap-1.5 rounded-lg border border-gray-900 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50 sm:text-sm">
+                <Link to={`/outward/${id}/receiving`} className="flex items-center gap-1.5 rounded-lg border border-gray-900 bg-white px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-gray-900 hover:bg-gray-50 sm:text-sm">
                   <Calendar size={15} /> {received ? "Update receiving details" : "Fill receiving details"}
                 </Link>
               )}
               {canEdit && (
-                <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
+                <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-white hover:bg-black sm:text-sm">Update</button>
               )}
               {/* Download: only once the entry is fully dispatched, and only for the admin / warehouse manager. Sales and Account never get it. */}
               {dispatched && received && (isSuperAdmin || isWarehouse) && (
-                <button type="button" onClick={() => downloadOutwardPdf(outward, items, docsStage && showDocuments ? documentRows : [], currentStatus, { includeDispatch: showDispatchInfo || showDocuments, includeCost: showCost })} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /> Download</button>
+                <button type="button" aria-label="Download PDF" title="Download PDF" onClick={() => downloadOutwardPdf(outward, items, docsStage && showDocuments ? documentRows : [], currentStatus, { includeDispatch: showDispatchInfo || showDocuments, includeCost: showCost })} className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"><Download size={15} /><span className="hidden sm:inline">Download</span></button>
               )}
             </div>
 
             {statusStyle && (
-              <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-medium sm:px-4 sm:py-2 sm:text-sm ${statusStyle.cls}`}>
+              <span className={`hidden shrink-0 px-2.5 py-1 rounded-full text-xs font-medium sm:inline-block sm:px-4 sm:py-2 sm:text-sm ${statusStyle.cls}`}>
                 {statusStyle.label}
               </span>
             )}
@@ -406,11 +413,11 @@ export default function OutwardDetail() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl border p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-5">Items</h2>
+        <div className="bg-white rounded-xl border p-4 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Items</h2>
 
           <div className={showCost ? "overflow-x-auto" : ""}>
-          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : "table-fixed"}`}>
+          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
@@ -432,10 +439,10 @@ export default function OutwardDetail() {
               {items.map((item, index) => (
                 <tr key={item.id || index} className="border-b last:border-0">
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 truncate font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
+                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
+                  <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
+                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
                   {showCost && (
                     <>
                       <td className="py-2 px-1 sm:py-4 sm:px-3">
@@ -508,7 +515,7 @@ export default function OutwardDetail() {
 
       {/* Approve / reject dialog (Account, Super admin) */}
       {decision && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-base font-semibold text-gray-900">
               {decision === "approve" ? "Approve this outward entry?" : decision === "hold" ? "Put this outward entry on hold?" : "Reject this outward entry?"}

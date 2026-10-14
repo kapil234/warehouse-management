@@ -215,11 +215,11 @@ export default function OutwardDocuments({
   const rows = canManage ? documentRows : documentRows.filter((row) => row.document);
 
   return (
-    <div className="bg-white rounded-xl border p-6">
-      <div className="mb-5 flex items-start justify-between gap-4">
+    <div className="bg-white rounded-xl border p-4 sm:p-6">
+      <div className="mb-4 flex items-start justify-between gap-3 sm:mb-5 sm:gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-          <p className="text-sm text-gray-500 mt-1">
+          <h2 className="text-base font-semibold text-gray-900 sm:text-lg">{title}</h2>
+          <p className="text-[11px] text-gray-500 mt-0.5 sm:text-sm sm:mt-1">
             {subtitle || (canManage ? "Upload, download, replace or delete required documents" : "Dispatch documents")}
           </p>
         </div>
@@ -229,7 +229,7 @@ export default function OutwardDocuments({
             <button
               type="button"
               onClick={() => setShowDocumentMenu((v) => !v)}
-              className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white hover:bg-gray-800"
+              className="flex items-center gap-1 rounded-lg bg-black px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-gray-800 sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs"
             >
               <Plus size={14} /> Add document
             </button>

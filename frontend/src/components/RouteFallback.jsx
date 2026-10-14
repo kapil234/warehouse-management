@@ -9,7 +9,7 @@ export default function RouteFallback({ fullScreen = false }) {
       role="status"
       aria-label="Loading page"
       className={`flex items-center justify-center ${
-        fullScreen ? "min-h-screen bg-[#F1EFE8]" : "min-h-[60vh]"
+        fullScreen ? "min-h-dvh bg-[#F1EFE8]" : "min-h-[60vh]"
       }`}
     >
       <Loader2 size={28} className="animate-spin text-blue-600" />

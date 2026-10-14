@@ -156,7 +156,7 @@ export default function ProductManagement() {
 
   if (status === "loading" && products.length === 0) {
     return (
-      <div className="min-h-screen bg-[#F1EFE8] flex items-center justify-center">
+      <div className="min-h-dvh bg-[#F1EFE8] flex items-center justify-center">
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <Loader2 size={19} className="animate-spin" /> Loading products...
         </div>
@@ -165,11 +165,11 @@ export default function ProductManagement() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
+    <div className="min-h-dvh bg-[#F1EFE8] p-4 sm:p-6">
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Product Management</h1>
+          <h1 className="text-lg font-semibold text-gray-900 sm:text-2xl">Product Management</h1>
           
         </div>
         <button
@@ -218,7 +218,7 @@ export default function ProductManagement() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-left">
+            <table className="mobile-cards w-full min-w-[520px] text-left">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
@@ -270,7 +270,7 @@ export default function ProductManagement() {
       {/* Add / Edit */}
       {showForm && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4"
           onClick={close}
         >
           <div

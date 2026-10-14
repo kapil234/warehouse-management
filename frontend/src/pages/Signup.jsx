@@ -185,16 +185,16 @@ export default function Signup() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] flex items-center justify-center px-4 py-8">
+    <div className="min-h-dvh bg-[#F1EFE8] flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-2xl rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        <div className="bg-blue-600 px-6 py-6 text-white">
+        <div className="bg-blue-600 px-4 py-5 sm:px-6 sm:py-6 text-white">
           <div className="flex items-center gap-3">
             <div className="h-11 w-11 rounded-xl bg-white/15 flex items-center justify-center"><Package size={22} /></div>
             <div><h1 className="text-xl font-semibold">{isAddingForCompany ? "Create user" : "Create account"}</h1><p className="text-sm text-blue-100">InvTrack warehouse operations</p></div>
           </div>
         </div>
 
-        <form onSubmit={submit} className="p-6 space-y-5">
+        <form onSubmit={submit} className="p-4 sm:p-6 space-y-5">
           {serverError && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{serverError}</div>}
           {isAddingForCompany && <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">This user will be added to {queryCompanyName}. You can also add them to other companies below, and grant warehouse access during signup.</div>}
 

@@ -27,6 +27,7 @@ import {
   isAccountDocCategory,
   refTypeLabel,
   refTypeDocument,
+  isReceivingDocCategory,
   refNumberLabel,
 } from "../features/outward/outwardHelpers";
 import useProducts from "../features/product/useProducts";
@@ -554,14 +555,14 @@ export default function OutwardForm() {
 
   if (loadingEntry) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6 md:px-6">
+    <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-4xl">
         <div className="mb-6 flex items-center gap-3">
           <button type="button" onClick={() => navigate(-1)} className="text-gray-500 hover:text-gray-800"><ArrowLeft size={22} /></button>
@@ -926,7 +927,7 @@ export default function OutwardForm() {
 
               <OutwardDocuments
                 outwardId={editId}
-                documents={(currentOutward?.documents || []).filter((d) => !isAccountDocCategory(d.docCategory))}
+                documents={(currentOutward?.documents || []).filter((d) => !isAccountDocCategory(d.docCategory) && !isReceivingDocCategory(d.docCategory))}
                 canManage
                 requiredDocuments={[]}
                 showSummary={false}

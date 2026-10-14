@@ -592,7 +592,7 @@ export default function Inward() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] overflow-x-hidden">
+    <div className="min-h-dvh bg-[#F1EFE8] overflow-x-hidden">
       <main className="mx-auto max-w-[1200px] px-3 py-4 pb-6 sm:px-6 sm:py-5 lg:px-8">
         <div className="mb-4 flex items-center justify-between sm:mb-5">
           <div>

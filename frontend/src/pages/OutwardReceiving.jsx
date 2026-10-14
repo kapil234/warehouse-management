@@ -135,7 +135,7 @@ export default function OutwardReceiving() {
 
   if (detailStatus === "loading" || (detailStatus === "idle" && !outward) || (outward && outward.id !== id)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
       </div>
     );
@@ -143,7 +143,7 @@ export default function OutwardReceiving() {
 
   if (detailError || !outward) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-dvh bg-gray-50 p-4 sm:p-6">
         <button onClick={() => navigate(-1)} className="mb-6 flex items-center gap-2 text-gray-600"><ArrowLeft size={20} />Back</button>
         <div className="rounded-xl border border-red-200 bg-white p-6 text-red-600">{detailError || "Outward entry not found."}</div>
       </div>
@@ -152,14 +152,14 @@ export default function OutwardReceiving() {
 
   if (!dispatched) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Opening outward entry...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6 md:px-6">
+    <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-4xl">
         <div className="mb-6 flex items-center gap-3">
           <button type="button" onClick={() => navigate("/outward")} className="text-gray-500 hover:text-gray-800"><ArrowLeft size={22} /></button>

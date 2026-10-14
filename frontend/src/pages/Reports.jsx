@@ -319,15 +319,15 @@ export default function Reports() {
   const loadingLedger = ledgerStatus === "loading";
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
+    <div className="min-h-dvh bg-[#F1EFE8] p-4 sm:p-6">
       {/* =================================================
           HEADER
       ================================================= */}
 
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Reports</h1>
-          <p className="mt-1 text-sm text-gray-500">{scopedWarehouseId ? selectedWarehouse?.name : "All warehouses"}</p>
+          <h1 className="text-lg font-semibold text-gray-900 sm:text-2xl">Reports</h1>
+          <p className="mt-0.5 text-xs text-gray-500 sm:mt-1 sm:text-sm">{scopedWarehouseId ? selectedWarehouse?.name : "All warehouses"}</p>
         </div>
 
         <DateRangeFilter
@@ -448,7 +448,7 @@ export default function Reports() {
 
           {!loadingLedger && ledger.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left">
+              <table className="mobile-cards w-full min-w-[560px] text-left">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Date</th>

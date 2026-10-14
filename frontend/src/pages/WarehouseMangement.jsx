@@ -385,14 +385,14 @@ export default function WarehouseManagement() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
+    <div className="min-h-dvh bg-[#F1EFE8] p-4 sm:p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">
+          <h1 className="text-lg font-semibold text-gray-900 sm:text-2xl">
             Warehouses
           </h1>
 
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-xs text-gray-500 mt-0.5 sm:text-sm sm:mt-1">
             {queryCompanyName
               ? `${queryCompanyName} • `
               : ""}
@@ -441,7 +441,7 @@ export default function WarehouseManagement() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <table className="mobile-cards min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left font-medium text-gray-500">
@@ -1057,7 +1057,7 @@ function Modal({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4"
       onClick={onClose}
     >
       <div

@@ -177,7 +177,7 @@ export default function InwardDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-dvh bg-gray-50 flex items-center justify-center">
         <div className="flex items-center gap-3 text-gray-600">
           <Loader2 className="w-6 h-6 animate-spin" />
           Loading inward details...
@@ -188,7 +188,7 @@ export default function InwardDetail() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-dvh bg-gray-50 p-4 sm:p-6">
         <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-600 mb-6">
           <ArrowLeft size={20} />
           Back
@@ -237,7 +237,7 @@ export default function InwardDetail() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-dvh bg-gray-50">
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 sm:py-5">
           <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-3 sm:gap-2 sm:text-base sm:mb-4">
@@ -245,13 +245,13 @@ export default function InwardDetail() {
             Back
           </button>
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h1 className="text-lg font-bold text-gray-900 sm:text-2xl">Inward Details</h1>
-              <p className="text-xs text-gray-500 mt-0.5 sm:text-base sm:mt-1">{inward.grnNumber || `Inward #${inward.id}`}</p>
+              <h1 className="text-base font-bold text-gray-900 sm:text-2xl">Inward Details</h1>
+              <p className="break-all text-[11px] text-gray-500 mt-0.5 sm:text-base sm:mt-1">{inward.grnNumber || `Inward #${inward.id}`}</p>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {!viewOnly && (
               <button type="button" onClick={() => navigate(`/inward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-black sm:text-sm">Update</button>
               )}
@@ -298,10 +298,10 @@ export default function InwardDetail() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border p-6">
+        <div className="bg-white rounded-xl border p-4 sm:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-5">Items</h2>
 
-          <table className="w-full table-fixed text-[11px] sm:text-sm">
+          <table className="w-full text-[11px] sm:text-sm">
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
@@ -315,10 +315,10 @@ export default function InwardDetail() {
               {items.map((item, index) => (
                 <tr key={item.id || index} className="border-b last:border-0">
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 truncate font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
+                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
+                  <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
-                  <td className="py-2 px-1 truncate sm:py-4 sm:px-3">{item.uom || "-"}</td>
+                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
                 </tr>
               ))}
               {items.length === 0 && (
@@ -332,7 +332,7 @@ export default function InwardDetail() {
           </table>
         </div>
 
-        <div className="bg-white rounded-xl border p-6">
+        <div className="bg-white rounded-xl border p-4 sm:p-6">
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Documents</h2>

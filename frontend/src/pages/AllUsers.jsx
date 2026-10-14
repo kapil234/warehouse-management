@@ -166,7 +166,7 @@ export default function AllUsers() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
+    <div className="min-h-dvh bg-[#F1EFE8] p-4 sm:p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
         <div>
           {companyId && (
@@ -177,10 +177,10 @@ export default function AllUsers() {
               <ArrowLeft size={15} /> Back to Companies
             </Link>
           )}
-          <h1 className="text-2xl font-semibold text-gray-900">
+          <h1 className="text-lg font-semibold text-gray-900 sm:text-2xl">
             {companyId ? `Users – ${companyName}` : "User Management"}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-xs text-gray-500 mt-0.5 sm:text-sm sm:mt-1">
             Manage accounts and role-based access.
           </p>
         </div>
@@ -238,7 +238,7 @@ export default function AllUsers() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="mobile-cards w-full min-w-[760px] text-sm">
           <thead>
             <tr className="border-b bg-gray-50 text-left text-xs text-gray-500">
               <th className="px-4 py-3">User</th>
@@ -358,7 +358,7 @@ export default function AllUsers() {
 
       {selected && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4"
           onClick={close}
         >
           <div

@@ -657,7 +657,7 @@ export default function InwardForm() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6 md:px-6">
+    <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-4xl">
         <div className="mb-6 flex items-center gap-3">
           <button
@@ -1731,7 +1731,7 @@ export default function InwardForm() {
 //   };
 
 //   return (
-//     <div className="min-h-screen bg-gray-50 px-4 py-6 md:px-6">
+//     <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
 //       <div className="mx-auto max-w-4xl">
 //         <div className="mb-6 flex items-center gap-3">
 //           <button

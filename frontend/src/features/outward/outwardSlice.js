@@ -560,6 +560,12 @@ const outwardSlice = createSlice({
         }
       })
 
+      // Dispatch details saved / updated: the response is the refreshed entry.
+      .addCase(dispatchOutward.fulfilled, (state, action) => {
+        const entry = action.payload?.data;
+        if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
+      })
+
       // Receiving details saved: the response is the refreshed entry.
       .addCase(saveOutwardReceiving.fulfilled, (state, action) => {
         const entry = action.payload?.data;

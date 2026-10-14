@@ -420,7 +420,7 @@ export default function Outward() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8]">
+    <div className="min-h-dvh bg-[#F1EFE8]">
       <main className="mx-auto max-w-[1200px] px-3 py-4 pb-24 sm:px-6 sm:py-5 lg:px-8">
         <div className="mb-4 flex items-center justify-between sm:mb-5">
           <div>

@@ -13,7 +13,7 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
+import { isReceivingDocCategory, isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 
 /**
@@ -201,7 +201,7 @@ export default function OutwardDispatch() {
 
   if (detailStatus === "loading" || (detailStatus === "idle" && !outward) || (outward && outward.id !== id)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
       </div>
     );
@@ -210,7 +210,7 @@ export default function OutwardDispatch() {
   // Approval stage (waiting for approval / rejected): no dispatch fields or documents yet.
   if (detailStatus === "succeeded" && superAdmin && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(outward?.workflowStatus)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-gray-600">
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Opening approval...
       </div>
     );
@@ -218,7 +218,7 @@ export default function OutwardDispatch() {
 
   if (detailError || !outward) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-dvh bg-gray-50 p-4 sm:p-6">
         <button onClick={() => navigate(-1)} className="mb-6 flex items-center gap-2 text-gray-600"><ArrowLeft size={20} />Back</button>
         <div className="rounded-xl border border-red-200 bg-white p-6 text-red-600">{detailError || "Outward entry not found."}</div>
       </div>
@@ -237,9 +237,9 @@ export default function OutwardDispatch() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-6 md:px-6">
+    <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6 flex items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 sm:mb-6">
           <div className="flex items-center gap-3">
             <button type="button" onClick={() => navigate(-1)} className="text-gray-500 hover:text-gray-800"><ArrowLeft size={22} /></button>
             <div>
@@ -248,7 +248,7 @@ export default function OutwardDispatch() {
             </div>
           </div>
           {superAdmin && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {!alreadyDispatched && (
                 <button type="button" onClick={() => { setRejectReason(""); setRejectOpen(true); }} className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 sm:text-sm">Reject</button>
               )}
@@ -408,7 +408,7 @@ export default function OutwardDispatch() {
 
           <OutwardDocuments
             outwardId={id}
-            documents={outward.documents || []}
+            documents={(outward.documents || []).filter((d) => !isReceivingDocCategory(d.docCategory))}
             canManage
             requiredDocuments={[]}
             showSummary={false}
@@ -434,7 +434,7 @@ export default function OutwardDispatch() {
       </div>
 
       {rejectOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
             <h3 className="text-base font-semibold text-gray-900">Reject this outward entry?</h3>
             <p className="mt-1 text-sm text-gray-500">It becomes Rejected. You can approve it again, or Sales can fix the details and send it again.</p>

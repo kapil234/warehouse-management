@@ -130,7 +130,7 @@ export default function StockLedger() {
     "w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-8 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400";
 
   return (
-    <div className="min-h-screen bg-[#F1EFE8] p-4 sm:p-6">
+    <div className="min-h-dvh bg-[#F1EFE8] p-4 sm:p-6">
       {/* =================================================
           HEADER
       ================================================= */}
@@ -143,8 +143,8 @@ export default function StockLedger() {
 
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Stock Ledger Summary</h1>
-            <p className="mt-1 text-sm text-gray-500">{scopeLabel}</p>
+            <h1 className="text-lg font-semibold text-gray-900 sm:text-2xl">Stock Ledger Summary</h1>
+            <p className="mt-0.5 text-xs text-gray-500 sm:mt-1 sm:text-sm">{scopeLabel}</p>
           </div>
 
           <div className="relative">
@@ -269,7 +269,7 @@ export default function StockLedger() {
 
               {!loading && rows.length > 0 && (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[620px] text-left">
+                  <table className="mobile-cards w-full min-w-[620px] text-left">
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Category</th>

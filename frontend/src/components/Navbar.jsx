@@ -57,10 +57,10 @@ function Navbar({ location = "Delhi Warehouse" }) {
     .toUpperCase();
 
   return (
-    <header className="h-16 bg-blue-700 flex items-center justify-between px-6 shrink-0">
+    <header className="h-14 md:h-16 bg-blue-700 flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0" style={{ paddingTop: "env(safe-area-inset-top)" }}>
 
       {/* Logo */}
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <div className="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center">
           <Package className="text-white" size={18} />
         </div>
@@ -71,7 +71,7 @@ function Navbar({ location = "Delhi Warehouse" }) {
       </div>
 
       {/* Right side */}
-      <div className="flex items-center gap-5">
+      <div className="flex min-w-0 items-center gap-3 sm:gap-5">
 
         {/* Warehouse switcher - warehouse managers only */}
         {canSwitchWarehouse && warehouses.length > 0 && (
