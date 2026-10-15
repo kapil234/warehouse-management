@@ -77,7 +77,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lastScan, setLastScan] = useState("");
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
-  const [camTools, setCamTools] = useState({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
+  const [camTools, setCamTools] = useState({ torch: false, torchOn: false });
 
   const inputRefs = useRef({}); // rowIndex -> input element
   const keyStats = useRef({ start: 0, last: 0, count: 0 });
@@ -256,7 +256,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       if (addToSelectedRef.current(text, "CAMERA")) beep();
     };
 
-    // Picks up focus / torch / zoom of the running camera track.
+    // Picks up focus / torch of the running camera track.
     const setupTrack = async () => {
       const video = document.querySelector(`#${READER_ID} video`);
       const track = video?.srcObject?.getVideoTracks?.()[0];
@@ -266,8 +266,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       try {
         if (caps.focusMode?.includes?.("continuous")) await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
       } catch { /* focus control is optional */ }
-      const zoom = caps.zoom ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 5), step: caps.zoom.step || 0.1 } : null;
-      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom, zoomValue: zoom ? Math.max(zoom.min, 1) : 1 });
+      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false });
     };
 
     const attempts = [
@@ -313,7 +312,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     return () => {
       cancelled = true;
       trackRef.current = null;
-      setCamTools({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
+      setCamTools({ torch: false, torchOn: false });
       if (reader && running) {
         reader.stop().then(() => reader.clear?.()).catch(() => {});
       }
@@ -322,7 +321,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
 
   const toggleTorch = async () => {
     const track = trackRef.current;
-    if (!track) return;
+    if (!track || !camTools.torch) return toast.info("Flash is not supported by this camera / browser.");
     const next = !camTools.torchOn;
     try {
       await track.applyConstraints({ advanced: [{ torch: next }] });
@@ -330,11 +329,6 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     } catch { toast.info("Flash is not available on this camera."); }
   };
 
-  const changeZoom = async (value) => {
-    const track = trackRef.current;
-    setCamTools((t) => ({ ...t, zoomValue: value }));
-    try { await track?.applyConstraints({ advanced: [{ zoom: value }] }); } catch { /* zoom is optional */ }
-  };
 
   const selectedRowInfo = selected != null ? rows[selected] : null;
   const selectedDone = Boolean(selectedRowInfo) && rowFilled(selectedRowInfo) >= selectedRowInfo.quantity;
@@ -373,13 +367,13 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           onFocus={() => selectRow(rowIndex)}
           onChange={(e) => setDrafts((d) => ({ ...d, [rowIndex]: cleanSerialInput(e.target.value) }))}
           onKeyDown={(e) => handleKeyDown(e, rowIndex)}
-          className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:ring-2 focus:ring-blue-500 ${mobile ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm"}`}
+          className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:ring-2 focus:ring-blue-500 ${mobile ? "px-3 py-2 text-sm" : "px-3 py-2 text-sm"}`}
         />
-        <button type="button" title="Add" onClick={() => submitDraft(rowIndex, "MANUAL")} className={`flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 font-semibold text-white hover:bg-black ${mobile ? "h-7 px-2 text-[11px]" : "h-9 px-3 text-xs"}`}>
-          <Plus size={mobile ? 12 : 14} />Add
+        <button type="button" title="Add" onClick={() => submitDraft(rowIndex, "MANUAL")} className={`flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 font-semibold text-white hover:bg-black ${mobile ? "h-10 px-3 text-xs" : "h-9 px-3 text-xs"}`}>
+          <Plus size={mobile ? 14 : 14} />Add
         </button>
-        <button type="button" onClick={() => openCamera(rowIndex)} className={`flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 font-semibold text-white hover:bg-blue-700 ${mobile ? "h-7 px-2 text-[11px]" : "h-9 px-3 text-xs"}`}>
-          <Camera size={mobile ? 13 : 15} />Scan
+        <button type="button" onClick={() => openCamera(rowIndex)} className={`flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 font-semibold text-white hover:bg-blue-700 ${mobile ? "h-10 px-3 text-xs" : "h-9 px-3 text-xs"}`}>
+          <Camera size={15} />Scan
         </button>
       </div>
     );
@@ -394,12 +388,12 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const dupCount = (text) => lines.reduce((n, l) => n + (values[l.key] || []).filter((x) => cleanSerialInput(x.serialNo).toLowerCase() === text).length, 0);
     return (
       <tr className="border-b last:border-0">
-        <td colSpan={colSpan} className="px-2 pb-3 pt-1 sm:px-3 sm:pt-4">
+        <td colSpan={colSpan} className="px-2 pb-4 pt-2 sm:px-3 sm:pt-4">
           <div className="flex flex-wrap items-center gap-2">
             {slots.map((s, i) => {
               const dup = dupCount(cleanSerialInput(s.serialNo).toLowerCase()) > 1;
               return (
-                <span key={`${s.serialNo}-${i}`} title={SOURCE_LABEL[s.source] || "typed"} className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs ${dup ? "border-red-300 bg-red-50 text-red-700" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
+                <span key={`${s.serialNo}-${i}`} title={SOURCE_LABEL[s.source] || "typed"} className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-xs sm:px-2 sm:py-1 ${dup ? "border-red-300 bg-red-50 text-red-700" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
                   {s.serialNo}
                   {!disabled && <button type="button" title="Remove" onClick={() => removeSerial(row, i)} className="text-blue-400 hover:text-red-500"><X size={13} /></button>}
                 </span>
@@ -418,7 +412,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const hasChips = rowSlots(rows[rowIndex]).some((s) => cleanSerialInput(s.serialNo));
     return (
       <tr className={`sm:hidden ${hasChips ? "" : "border-b last:border-0"}`}>
-        <td colSpan={colSpan} className="px-2 pb-2 pt-0">{inputCell(item, rowIndex, true)}</td>
+        <td colSpan={colSpan} className="px-2 pb-3 pt-1">{inputCell(item, rowIndex, true)}</td>
       </tr>
     );
   };
@@ -439,21 +433,25 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
-        <div id={READER_ID} className="overflow-hidden rounded-lg bg-black" />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {camTools.torch && (
-            <button type="button" onClick={toggleTorch} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
-              {camTools.torchOn ? <Zap size={14} /> : <ZapOff size={14} />}Flash
-            </button>
-          )}
+        <div className="relative h-60 w-full overflow-hidden rounded-lg bg-black sm:h-64">
+          <div id={READER_ID} className="h-full w-full [&_video]:!h-full [&_video]:!w-full [&_video]:!object-cover [&>div]:!hidden" />
+          {/* Scan frame: put the barcode inside this rectangle */}
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="relative h-[46%] w-[90%] rounded-md shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
+              <span className="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl-md border-l-4 border-t-4 border-white" />
+              <span className="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr-md border-r-4 border-t-4 border-white" />
+              <span className="absolute -bottom-0.5 -left-0.5 h-5 w-5 rounded-bl-md border-b-4 border-l-4 border-white" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-br-md border-b-4 border-r-4 border-white" />
+              <span className="absolute inset-x-2 top-1/2 h-0.5 -translate-y-1/2 animate-pulse bg-red-500/80" />
+            </div>
+          </div>
         </div>
-        {camTools.zoom && (
-          <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
-            Zoom
-            <input type="range" min={camTools.zoom.min} max={camTools.zoom.max} step={camTools.zoom.step} value={camTools.zoomValue} onChange={(e) => changeZoom(Number(e.target.value))} className="flex-1" />
-          </label>
-        )}
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Point the camera at the barcode - it reads as soon as it is in view. Keep it flat and well lit; use Flash / Zoom if needed."}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={toggleTorch} className={`flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
+            {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
+          </button>
+        </div>
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame - it reads automatically. Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>

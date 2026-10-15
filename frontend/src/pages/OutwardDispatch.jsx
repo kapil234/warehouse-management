@@ -459,12 +459,12 @@ export default function OutwardDispatch() {
                 <tbody>
                   {items.map((item, index) => (
                     <Fragment key={item.id || index}>
-                    <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-xs last:border-0 sm:text-sm ${serial.rowProps(index).className}`}>
-                      <td className="px-1.5 py-2 sm:px-3">{index + 1}</td>
-                      <td className="px-1.5 py-2 sm:px-3">{item.category || "-"}</td>
-                      <td className="whitespace-nowrap px-1.5 py-2 font-medium sm:px-3">{item.sku || "-"}</td>
-                      <td className="px-1.5 py-2 sm:px-3">{item.quantity}</td>
-                      <td className="px-1.5 py-2 sm:px-3">{item.uom || "-"}</td>
+                    <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-sm last:border-0 ${serial.rowProps(index).className}`}>
+                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{index + 1}</td>
+                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.category || "-"}</td>
+                      <td className="whitespace-nowrap px-1.5 py-4 font-medium sm:px-3 sm:py-2">{item.sku || "-"}</td>
+                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.quantity}</td>
+                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.uom || "-"}</td>
                       {serial.hasSerials && <td className="hidden px-3 py-1 align-middle sm:table-cell">{serial.inputCell(item, index)}</td>}
                       {showCost && (
                         <>
