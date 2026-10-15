@@ -17,6 +17,7 @@ import {
   OutwardForm,
   OutwardList,
   OutwardDetail,
+  OutwardTransportation,
   OutwardDispatch,
   OutwardReceiving,
   AllUsers,
@@ -101,7 +102,8 @@ const router = createBrowserRouter([
   // Sales fills customer + item + cost details (and edits them until Account approves).
   { path: "/outward/create", element: fullScreen(<OutwardForm />, SALES_ROLES) },
   { path: "/outward/:id/edit", element: fullScreen(<OutwardForm />, SALES_ROLES) },
-  // Warehouse manager fills vehicle / dispatch details after Account's approval.
+  // Warehouse manager: transportation form first (after Account's approval), then the dispatch form once Account shares the documents.
+  { path: "/outward/:id/transportation", element: fullScreen(<OutwardTransportation />, DISPATCH_ROLES) },
   { path: "/outward/:id/dispatch", element: fullScreen(<OutwardDispatch />, DISPATCH_ROLES) },
   // Right after dispatch: receiving date, receiver details and receiving documents.
   { path: "/outward/:id/receiving", element: fullScreen(<OutwardReceiving />, DISPATCH_ROLES) },

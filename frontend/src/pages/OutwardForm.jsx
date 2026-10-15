@@ -35,6 +35,7 @@ import useOutwardStock, { stockKey } from "../features/outward/useOutwardStock";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 import PartyNameField from "../components/PartyNameField";
 import OutwardDocuments from "../components/OutwardDocuments";
+import LocationLink from "../components/LocationLink";
 
 /**
  * =========================================================
@@ -141,6 +142,10 @@ export default function OutwardForm() {
   const [rejection, setRejection] = useState(null); // { by, remarks } when Account sent it back
   const [holdNote, setHoldNote] = useState(null); // { by, remarks } when Account put it on hold
   const [proofUploadingId, setProofUploadingId] = useState(null);
+  // Payment status / Approve By / UTR / proof are entered once for the whole outward and applied to every item on save.
+  const [payment, setPayment] = useState({ paymentStatus: "PENDING", utrNumber: "", approvedBy: "", proof: null, keepProof: false, savedProofName: "" });
+  const paymentRef = useRef(payment);
+  paymentRef.current = payment;
   // A new entry gets its id up front, so a payment proof is uploaded straight into
   // min/<warehouse code>/<outward id>/ and nothing is saved anywhere else.
   const newEntryId = useRef(crypto.randomUUID());
@@ -148,17 +153,19 @@ export default function OutwardForm() {
   const [loadingEntry, setLoadingEntry] = useState(isEdit);
   // Workflow status of the entry being edited (approved entries can still be edited before dispatch).
   const [entryStatus, setEntryStatus] = useState(null);
-  const alreadyApproved = isEdit && entryStatus === "PENDING_DISPATCH";
+  const alreadyApproved = isEdit && ["PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"].includes(entryStatus);
 
   // Before dispatch the form only holds the sales information (customer, PI details, items, payment status); after
   // approving again the dispatch details are filled on the dispatch page. Once an entry is
   // dispatched, the super admin gets the whole form: sales + dispatch details + documents.
   const currentOutward = useSelector(selectCurrentOutward);
-  const showDispatchSection = isEdit && isSuperAdmin && entryStatus === "DISPATCHED";
+  const showDispatchSection = isEdit && isSuperAdmin && ["DISPATCHED", "DELIVERED"].includes(entryStatus);
   const [dispatchMode, setDispatchMode] = useState("By Road");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [driverName, setDriverName] = useState("");
   const [driverContact, setDriverContact] = useState("");
+  // Transportation details are frozen once Account has uploaded its documents (the server refuses changes too).
+  const [transportLocked, setTransportLocked] = useState(false);
   const [dispatchRemarks, setDispatchRemarks] = useState("");
   const [accountRefs, setAccountRefs] = useState([newAccountRef()]);
   const [managerRefs, setManagerRefs] = useState([newManagerRef()]);
@@ -217,6 +224,8 @@ export default function OutwardForm() {
     if (isEdit) return;
     itemsRef.current.forEach((i) => { if (i.proof?.fileKey) dispatch(deleteUploadedProof({ fileKey: i.proof.fileKey })); });
     setItems((prev) => (prev.some((i) => i.proof) ? prev.map((i) => (i.proof ? { ...i, proof: null } : i)) : prev));
+    if (paymentRef.current.proof?.fileKey) dispatch(deleteUploadedProof({ fileKey: paymentRef.current.proof.fileKey }));
+    setPayment((p) => (p.proof ? { ...p, proof: null } : p));
     if (piFileRef.current?.fileKey) dispatch(deleteUploadedProof({ fileKey: piFileRef.current.fileKey }));
     setPiFile(null);
   }, [warehouseId, isEdit, dispatch]);
@@ -233,8 +242,9 @@ export default function OutwardForm() {
         return;
       }
       const x = result.payload;
-      if (!isSuperAdmin && !["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"].includes(x.workflowStatus)) {
-        toast.error("This entry has already been dispatched and can't be edited.");
+      // Editable until the transportation details are sent AND Account has uploaded documents (x.editLocked, from the server).
+      if (!isSuperAdmin && (x.editLocked || !["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING"].includes(x.workflowStatus))) {
+        toast.error(x.editLockReason || "This entry can no longer be edited.");
         navigate(`/outward/${editId}`, { replace: true });
         return;
       }
@@ -274,7 +284,21 @@ export default function OutwardForm() {
         }))
       );
       setOriginalItems(x.items || []);
+      {
+        const first = (x.items || [])[0];
+        if (first) {
+          setPayment({
+            paymentStatus: first.paymentStatus || "PENDING",
+            utrNumber: first.utrNumber || "",
+            approvedBy: first.approvedBy || "",
+            proof: null,
+            keepProof: Boolean(first.hasProof),
+            savedProofName: first.proofFileName || "",
+          });
+        }
+      }
       setEntryStatus(x.workflowStatus || null);
+      setTransportLocked(Boolean(x.transportLocked));
       // Prefill what the warehouse already filled (vehicle, mode, reference documents, remarks).
       if (x.dispatchMode && !isPlaceholder(x.dispatchMode)) setDispatchMode(x.dispatchMode);
       setVehicleNumber(x.vehicleNumber || "");
@@ -370,32 +394,31 @@ export default function OutwardForm() {
     setItems((p) => p.filter((i) => i.id !== id));
   };
 
-  const handleProofPick = async (itemId, file) => {
+  const handleProofPick = async (file) => {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) return toast.error("File size must be less than 10 MB.");
     if (!PROOF_TYPES.includes(file.type)) return toast.error("Only PDF, JPG, PNG and WEBP files are allowed.");
 
     if (!warehouseId) return toast.error("Please select a warehouse before attaching a payment proof.");
 
-    const previousKey = itemsRef.current.find((i) => i.id === itemId)?.proof?.fileKey;
-    setProofUploadingId(itemId);
+    const previousKey = paymentRef.current.proof?.fileKey;
+    setProofUploadingId("payment");
     const result = await dispatch(uploadOutwardProof({ file, warehouseId, outwardId }));
     setProofUploadingId(null);
     if (uploadOutwardProof.fulfilled.match(result)) {
-      patchItem(itemId, { proof: result.payload, keepProof: false });
+      setPayment((p) => ({ ...p, proof: result.payload, keepProof: false }));
       // The file it replaces was never saved, so it is deleted from storage right away.
       if (previousKey) dispatch(deleteUploadedProof({ fileKey: previousKey }));
     } else {
       toast.error(result.payload || "Failed to upload the file.");
     }
   };
-
-  const removeProof = (itemId) => {
+  const removeProof = () => {
     // A file uploaded in this session (not saved yet) is deleted from storage now; a saved proof is
     // deleted by the server when the entry is saved without it.
-    const fileKey = itemsRef.current.find((i) => i.id === itemId)?.proof?.fileKey;
+    const fileKey = paymentRef.current.proof?.fileKey;
     if (fileKey) dispatch(deleteUploadedProof({ fileKey }));
-    patchItem(itemId, { proof: null, keepProof: false, savedProofName: "" });
+    setPayment((p) => ({ ...p, proof: null, keepProof: false, savedProofName: "" }));
   };
 
   const handlePiPick = async (file) => {
@@ -433,10 +456,15 @@ export default function OutwardForm() {
     if (!selectedCompanyId) return toast.error("Please select a company.");
     if (!warehouseId) return toast.error("Please select a warehouse.");
     if (operationBlocked || !permissions.canOutward) return toast.error("Outward is not available for this warehouse.");
-    if (!customerName.trim()) return toast.error("Please enter customer / recipient name.");
+    if (!customerName.trim()) return toast.error("Please enter customer name.");
     if (!companyName.trim()) return toast.error("Company name is missing.");
     if (piAmount !== "" && (!Number.isFinite(Number(piAmount)) || Number(piAmount) < 0)) return toast.error("Please enter a valid PI amount.");
 
+    if (!shipToContactPerson.trim()) return toast.error("Please enter Ship to contact person.");
+    if (!shipToLocation.trim()) return toast.error("Please enter Ship to location.");
+    if (!billToContactPerson.trim()) return toast.error("Please enter Bill to contact person.");
+    if (!shipToContactNo.trim()) return toast.error("Please enter Ship to contact no.");
+    if (!billToContactNo.trim()) return toast.error("Please enter Bill to contact no.");
     if (billToEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billToEmail.trim())) return toast.error("Please enter a valid Bill to email address.");
     for (const [label, value] of [["Ship to contact no.", shipToContactNo], ["Bill to contact no.", billToContactNo]]) {
       if (value.trim() && !/^[0-9+()\-\s]{6,20}$/.test(value.trim())) return toast.error(`Please enter a valid ${label}`);
@@ -448,11 +476,15 @@ export default function OutwardForm() {
       if (!item.sku.trim()) return toast.error(`${label}: please select SKU / model.`);
       if (Number(item.quantity) <= 0) return toast.error(`${label}: please enter a valid quantity.`);
       if (!item.uom) return toast.error(`${label}: please select UOM.`);
-      if (!item.paymentStatus) return toast.error(`${label}: please select the payment status.`);
-      if (item.paymentStatus !== "COMPLETED" && !item.approvedBy.trim()) return toast.error(`${label}: please enter Approve By.`);
-      if (item.paymentStatus !== "PENDING" && !item.utrNumber.trim() && !item.proof && !item.keepProof) {
-        return toast.error(`${label}: enter the UTR number or attach a payment proof (image / file).`);
-      }
+    }
+
+    // Payment details are shared by all items.
+    if (!payment.paymentStatus) return toast.error("Please select the payment status.");
+    if (payment.paymentStatus !== "COMPLETED" && !payment.approvedBy.trim()) return toast.error("Please enter Approve By.");
+    if (payment.paymentStatus !== "PENDING" && !payment.utrNumber.trim() && !payment.proof) {
+      // A proof saved earlier only covers items that already had one.
+      const savedCovers = payment.keepProof && items.every((i) => originalItems.some((o) => o.id === i.serverId && o.hasProof));
+      if (!savedCovers) return toast.error("Enter the UTR number or attach a payment proof (image / file).");
     }
 
     // Can't dispatch more than is in stock. (The server checks again when saving.)
@@ -490,7 +522,7 @@ export default function OutwardForm() {
       billToContactNo: billToContactNo.trim() || undefined,
       billToEmail: billToEmail.trim() || undefined,
       items: items.map((i) => {
-        const paid = i.paymentStatus !== "PENDING";
+        const paid = payment.paymentStatus !== "PENDING";
         return {
           serverId: i.serverId,
           category: i.category,
@@ -498,13 +530,13 @@ export default function OutwardForm() {
           sku: i.sku.trim(),
           quantity: Number(i.quantity),
           uom: i.uom,
-          paymentStatus: i.paymentStatus,
-          utrNumber: paid ? i.utrNumber.trim() || undefined : undefined,
-          approvedBy: i.paymentStatus !== "COMPLETED" ? i.approvedBy.trim() || undefined : undefined,
-          proofFileKey: paid ? i.proof?.fileKey : undefined,
-          proofFileName: paid ? i.proof?.fileName : undefined,
-          proofFileType: paid ? i.proof?.fileType : undefined,
-          keepProof: paid && !i.proof && i.keepProof,
+          paymentStatus: payment.paymentStatus,
+          utrNumber: paid ? payment.utrNumber.trim() || undefined : undefined,
+          approvedBy: payment.paymentStatus !== "COMPLETED" ? payment.approvedBy.trim() || undefined : undefined,
+          proofFileKey: paid ? payment.proof?.fileKey : undefined,
+          proofFileName: paid ? payment.proof?.fileName : undefined,
+          proofFileType: paid ? payment.proof?.fileType : undefined,
+          keepProof: paid && !payment.proof && payment.keepProof,
         };
       }),
     };
@@ -520,9 +552,9 @@ export default function OutwardForm() {
         ...managerRefs.filter((r) => r.refDocNumber.trim()).map(toPayload),
         ...legacyRefs,
       ];
-      if (entryStatus === "DISPATCHED") {
+      if (["DISPATCHED", "DELIVERED"].includes(entryStatus)) {
         if (!refs.length) return toast.error("Please enter at least one reference document number.");
-        if (!dispatchMode) return toast.error("Please select the dispatch mode.");
+        if (!dispatchMode && !transportLocked) return toast.error("Please select the dispatch mode.");
       }
       payload.dispatch = {
         dispatchMode,
@@ -545,7 +577,7 @@ export default function OutwardForm() {
     // replace (not push) so a successful save doesn't leave the form in browser history.
     const savedStatus = result.payload?.data?.workflowStatus;
     // Super admin + an approved entry waiting for dispatch goes straight to the dispatch form.
-    const target = isEdit ? (isSuperAdmin && savedStatus === "PENDING_DISPATCH" ? `/outward/${editId}/dispatch` : `/outward/${editId}`) : "/outward";
+    const target = isEdit ? (isSuperAdmin && ["PENDING_DISPATCH", "TRANSPORT_PENDING"].includes(savedStatus) ? `/outward/${editId}/dispatch` : `/outward/${editId}`) : "/outward";
     navigate(target, { replace: true });
   };
 
@@ -655,7 +687,7 @@ export default function OutwardForm() {
               </div>
             </div>
             <div className="mt-4">
-              <PartyNameField value={customerName} onChange={setCustomerName} storageKey="outward-customer-names" label="Customer / Recipient name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer / recipient name" addLabel="+ Add new customer / recipient" />
+              <PartyNameField value={customerName} onChange={setCustomerName} storageKey="outward-customer-names" label="Customer Name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer name" addLabel="+ Add new customer" />
             </div>
 
             {/* PI row: PI No., PI date, PI amount, PI upload */}
@@ -669,7 +701,7 @@ export default function OutwardForm() {
                 <input type="date" value={piDate} onChange={(e) => setPiDate(e.target.value)} className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>PI amount (₹)</label>
+                <label className={labelCls}>PI amount (inclusive GST)</label>
                 <input type="number" min="0" step="0.01" value={piAmount} onChange={(e) => setPiAmount(e.target.value)} placeholder="0.00" className={inputCls} />
               </div>
               <div>
@@ -692,16 +724,16 @@ export default function OutwardForm() {
             {/* Ship to details */}
             <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Ship to details</h3>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-              <div><label className={labelCls}>Contact person</label><input value={shipToContactPerson} onChange={(e) => setShipToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
-              <div><label className={labelCls}>Contact no.</label><input type="tel" value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
-              <div><label className={labelCls}>Location</label><input value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact person <span className="text-red-500">*</span></label><input required value={shipToContactPerson} onChange={(e) => setShipToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Location <span className="text-red-500">*</span></label><input required value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location or paste Google Maps link" className={inputCls} /><LocationLink value={shipToLocation} short /></div>
             </div>
 
             {/* Bill to details */}
             <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Bill to details</h3>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-              <div><label className={labelCls}>Contact person</label><input value={billToContactPerson} onChange={(e) => setBillToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
-              <div><label className={labelCls}>Contact no.</label><input type="tel" value={billToContactNo} onChange={(e) => setBillToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact person <span className="text-red-500">*</span></label><input required value={billToContactPerson} onChange={(e) => setBillToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" value={billToContactNo} onChange={(e) => setBillToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
               <div><label className={labelCls}>Email</label><input type="email" value={billToEmail} onChange={(e) => setBillToEmail(e.target.value)} placeholder="Enter email" className={inputCls} /></div>
             </div>
           </section>
@@ -725,10 +757,6 @@ export default function OutwardForm() {
               {items.map((item, index) => {
                 const stockInfo = item.sku ? availableFor(item.id, item.category, item.sku) : null;
                 const overLimit = stockInfo && Number(item.quantity) > stockInfo.available;
-                const paid = item.paymentStatus !== "PENDING";
-                const hasProof = Boolean(item.proof) || item.keepProof;
-                const proofName = item.proof?.fileName || item.savedProofName || "Payment proof";
-                const uploading = proofUploadingId === item.id;
 
                 return (
                   <div key={item.id} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
@@ -769,56 +797,57 @@ export default function OutwardForm() {
                       </div>
                     </div>
 
-                    {/* Payment side - this part is never shown to the warehouse manager. */}
-                    <div className="mt-4 border-t border-gray-100 pt-4">
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                          <label className={labelCls}>Payment status</label>
-                          <div className="relative">
-                            <select value={item.paymentStatus} onChange={(e) => updateItem(item.id, "paymentStatus", e.target.value)} className={`${inputCls} appearance-none`}>
-                              {COST_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                          </div>
-                        </div>
-                        {item.paymentStatus !== "COMPLETED" && (
-                          <div>
-                            <label className={labelCls}>Approve By</label>
-                            <input value={item.approvedBy} onChange={(e) => updateItem(item.id, "approvedBy", e.target.value)} placeholder="Enter approver name" className={inputCls} />
-                          </div>
-                        )}
-                      </div>
-
-                      {paid && (
-                        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                          <div>
-                            <label className={labelCls}>UTR number</label>
-                            <input value={item.utrNumber} onChange={(e) => updateItem(item.id, "utrNumber", e.target.value)} placeholder="Enter UTR number" className={inputCls} />
-                          </div>
-                          <div>
-                            <label className={labelCls}>Payment proof (image / file)</label>
-                            {hasProof ? (
-                              <div className="flex items-center justify-between gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-700">
-                                <span className="flex min-w-0 items-center gap-2"><Paperclip size={15} className="shrink-0" /><span className="truncate">{proofName}</span></span>
-                                <button type="button" onClick={() => removeProof(item.id)} title="Remove" className="shrink-0 text-green-700 hover:text-red-600"><X size={16} /></button>
-                              </div>
-                            ) : (
-                              <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-300 bg-white px-3 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 ${uploading ? "pointer-events-none opacity-60" : ""}`}>
-                                {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />}
-                                {uploading ? "Uploading..." : "Attach file"}
-                                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={uploading} onChange={(e) => { handleProofPick(item.id, e.target.files?.[0]); e.target.value = ""; }} />
-                              </label>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-gray-500 sm:col-span-2">
-                            {item.paymentStatus === "COMPLETED" ? "Completed" : "Partially completed"} needs the UTR number or a payment proof (either one is enough).
-                          </p>
-                        </div>
-                      )}
-                    </div>
                   </div>
                 );
               })}
+            </div>
+
+            {/* Payment side - entered once for all items; never shown to the warehouse manager. */}
+            <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50/40 p-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>Payment status</label>
+                  <div className="relative">
+                    <select value={payment.paymentStatus} onChange={(e) => setPayment((p) => ({ ...p, paymentStatus: e.target.value }))} className={`${inputCls} appearance-none`}>
+                      {COST_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                  </div>
+                </div>
+                {payment.paymentStatus !== "COMPLETED" && (
+                  <div>
+                    <label className={labelCls}>Approve By</label>
+                    <input value={payment.approvedBy} onChange={(e) => setPayment((p) => ({ ...p, approvedBy: e.target.value }))} placeholder="Enter approver name" className={inputCls} />
+                  </div>
+                )}
+              </div>
+
+              {payment.paymentStatus !== "PENDING" && (
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={labelCls}>UTR number</label>
+                    <input value={payment.utrNumber} onChange={(e) => setPayment((p) => ({ ...p, utrNumber: e.target.value }))} placeholder="Enter UTR number" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Payment proof (image / file)</label>
+                    {Boolean(payment.proof) || payment.keepProof ? (
+                      <div className="flex items-center justify-between gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-700">
+                        <span className="flex min-w-0 items-center gap-2"><Paperclip size={15} className="shrink-0" /><span className="truncate">{payment.proof?.fileName || payment.savedProofName || "Payment proof"}</span></span>
+                        <button type="button" onClick={removeProof} title="Remove" className="shrink-0 text-green-700 hover:text-red-600"><X size={16} /></button>
+                      </div>
+                    ) : (
+                      <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-300 bg-white px-3 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 ${proofUploadingId === "payment" ? "pointer-events-none opacity-60" : ""}`}>
+                        {proofUploadingId === "payment" ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />}
+                        {proofUploadingId === "payment" ? "Uploading..." : "Attach file"}
+                        <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" disabled={proofUploadingId === "payment"} onChange={(e) => { handleProofPick(e.target.files?.[0]); e.target.value = ""; }} />
+                      </label>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-500 sm:col-span-2">
+                    {payment.paymentStatus === "COMPLETED" ? "Completed" : "Partially completed"} needs the UTR number or a payment proof (either one is enough). This applies to all items.
+                  </p>
+                </div>
+              )}
             </div>
           </section>
 
@@ -875,7 +904,10 @@ export default function OutwardForm() {
               {/* WAREHOUSE MANAGER part - dispatch details, delivery challan / return note references, dispatch documents. */}
               <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
                 <h2 className="mb-4 text-sm font-semibold text-gray-900">Dispatch details</h2>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {transportLocked && (
+                  <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Vehicle / driver / transporter details are locked: the account team has already uploaded its documents.</p>
+                )}
+                <fieldset disabled={transportLocked} className="grid min-w-0 grid-cols-1 gap-4 border-0 p-0 md:grid-cols-3">
                   <div>
                     <label className={labelCls}>Dispatch mode</label>
                     <div className="relative">
@@ -888,7 +920,7 @@ export default function OutwardForm() {
                   <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
                   <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
                   <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
-                </div>
+                </fieldset>
 
                 <div className="mt-5 flex items-center justify-between">
                   <span className="text-xs font-semibold text-gray-700">Reference documents</span>

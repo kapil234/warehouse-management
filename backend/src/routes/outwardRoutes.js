@@ -8,6 +8,7 @@ import {
   rejectOutward,
   holdOutward,
   dispatchOutward,
+  saveTransportation,
   saveReceiving,
   saveAccountDocuments,
   downloadItemProof,
@@ -29,8 +30,10 @@ import { upload } from "../middleware/uploadMiddleware.js";
  *
  *   SALES              creates / edits (PI details + payment status, UTR / proof)  -> PENDING_APPROVAL
  *   ACCOUNT            approves, holds or rejects the entry  -> PENDING_DISPATCH / ON_HOLD / REJECTED
- *   ACCOUNT            also adds invoice / e-way bill / other reference documents + files (before dispatch)
- *   WAREHOUSE_MANAGER  fills the dispatch details (driver, vehicle, references)  -> DISPATCHED
+ *   WAREHOUSE_MANAGER  fills the TRANSPORTATION form (dedicated vehicle OR transporter)   - opens after approval
+ *   ACCOUNT            then uploads Invoice / E-way bill / DC Challan / Without Invoice / Other (locked until transportation is in).
+ *                      Invoice is never shared; any other document opens the dispatch form.
+ *   WAREHOUSE_MANAGER  fills the DISPATCH form (vehicle read-only, references, documents, serial scan)  -> DISPATCHED
  *   WAREHOUSE_MANAGER  then fills the receiving details (date, receiver, receiving copy)
  *   SUPER_ADMIN        can do every step
  *
@@ -64,7 +67,11 @@ router.post("/:id/approve", authorize("SUPER_ADMIN", "ACCOUNT"), approveOutward)
 router.post("/:id/reject", authorize("SUPER_ADMIN", "ACCOUNT"), rejectOutward);
 router.post("/:id/hold", authorize("SUPER_ADMIN", "ACCOUNT"), holdOutward);
 
-// Warehouse manager fills vehicle / dispatch details.
+// Warehouse manager fills the transportation form (dedicated vehicle OR transporter) after Account's approval.
+// Submitting it unlocks the document upload for the account team.
+router.put("/:id/transportation", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), saveTransportation);
+
+// Warehouse manager fills the dispatch form (opens once Account has shared a non-Invoice document).
 // Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.
 router.put("/:id/dispatch", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), upload.array("files", 10), dispatchOutward);
 

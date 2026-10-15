@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Plus, X, Zap, ZapOff } from "lucide-react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Camera, CheckCircle2, ImageUp, Plus, X, Zap, ZapOff } from "lucide-react";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { toast } from "react-toastify";
 import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../features/outward/serialHelpers";
 
@@ -20,9 +20,31 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../featu
  */
 
 const READER_ID = "serial-camera-reader";
+const FILE_READER_ID = "serial-file-reader";
 
-// Rectangle scan box (barcodes are long and thin) - same shape as the original scanner, shrinks only on very narrow screens.
-const qrbox = (w) => ({ width: Math.max(150, Math.min(300, Math.floor(w - 24))), height: 120 });
+// Product labels carry dense 1D barcodes (Code 128). Telling the reader which formats to look for makes it
+// faster and far more reliable than trying every format on every frame.
+const FORMATS = [
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.CODE_93,
+  Html5QrcodeSupportedFormats.CODABAR,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.QR_CODE,
+  Html5QrcodeSupportedFormats.DATA_MATRIX,
+];
+const READER_OPTIONS = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, verbose: false };
+
+// The scan box is the part of the picture that is read. A long barcode needs a WIDE box (almost the full width of the
+// camera view); the old fixed 300 px box cut a long barcode in half, so it could never be read.
+const qrbox = (viewW, viewH) => ({
+  width: Math.max(150, Math.floor(viewW * 0.94)),
+  height: Math.max(80, Math.min(180, Math.floor(viewH * 0.5))),
+});
 
 const cameraErrorMessage = (err) => {
   const name = err?.name || String(err || "");
@@ -230,10 +252,15 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     };
 
     const attempts = [
-      // same settings as the original scanner
-      () => ({ camera: { facingMode: "environment" }, config: { fps: 10, qrbox } }),
-      // any camera (some devices / laptops have no back camera)
-      () => ({ camera: { facingMode: "user" }, config: { fps: 10, qrbox } }),
+      // 1) HD picture: a dense barcode needs the detail (the default 640x480 picture is too blurry to read it)
+      () => ({
+        camera: { facingMode: "environment" },
+        config: { fps: 15, qrbox, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      }),
+      // 2) back camera with the device's default picture size
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 10, qrbox, disableFlip: true } }),
+      // 3) any camera (some devices / laptops have no back camera)
+      () => ({ camera: { facingMode: "user" }, config: { fps: 10, qrbox, disableFlip: true } }),
     ];
 
     const run = async () => {
@@ -242,7 +269,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
         if (cancelled) return;
         const { camera, config } = make();
         try {
-          reader = new Html5Qrcode(READER_ID);
+          reader = new Html5Qrcode(READER_ID, READER_OPTIONS);
           await reader.start(camera, config, onDecoded, () => {});
           running = true;
           if (cancelled) { await reader.stop().catch(() => {}); reader.clear?.(); return; }
@@ -288,6 +315,25 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const track = trackRef.current;
     setCamTools((t) => ({ ...t, zoomValue: value }));
     try { await track?.applyConstraints({ advanced: [{ zoom: value }] }); } catch { /* zoom is optional */ }
+  };
+
+  // Fallback: take / pick a photo of the label and read the barcode from that picture (full camera quality).
+  const scanPhoto = async (file) => {
+    if (!file) return;
+    const toastId = toast.loading("Reading barcode...");
+    const fileReader = new Html5Qrcode(FILE_READER_ID, READER_OPTIONS);
+    try {
+      const text = await fileReader.scanFile(file, false);
+      toast.dismiss(toastId);
+      if (text) {
+        if (addSerialRef.current(text, "CAMERA")) beep();
+      }
+    } catch {
+      toast.dismiss(toastId);
+      toast.error("Could not read a barcode from that photo. Get closer, keep the barcode flat and well lit, then try again.");
+    } finally {
+      try { fileReader.clear(); } catch { /* ignore */ }
+    }
   };
 
   useEffect(() => {
@@ -392,12 +438,17 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
         <div id={READER_ID} className="overflow-hidden rounded-lg bg-black" />
+        <div id={FILE_READER_ID} className="hidden" />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {camTools.torch && (
             <button type="button" onClick={toggleTorch} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
               {camTools.torchOn ? <Zap size={14} /> : <ZapOff size={14} />}Flash
             </button>
           )}
+          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+            <ImageUp size={14} />Take photo
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { scanPhoto(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
         </div>
         {camTools.zoom && (
           <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
@@ -405,7 +456,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             <input type="range" min={camTools.zoom.min} max={camTools.zoom.max} step={camTools.zoom.step} value={camTools.zoomValue} onChange={(e) => changeZoom(Number(e.target.value))} className="flex-1" />
           </label>
         )}
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Hold the phone 15-25 cm away, keep the barcode flat inside the box. Use Flash / Zoom if it does not read."}</p>
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Keep the whole barcode inside the box, 15-25 cm away and flat. If it does not read, use Flash / Zoom, or tap Take photo."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>

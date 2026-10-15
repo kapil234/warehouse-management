@@ -12,6 +12,8 @@ import {
   X,
   Pause,
   Paperclip,
+  Lock,
+  FileText,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useNavigate, useParams } from "react-router-dom";
@@ -31,10 +33,19 @@ import {
 } from "../features/outward/outwardSlice";
 import {
   getStatusStyle,
+  STAGE,
+  isTransportSubmitted,
+  DISPATCH_MODES,
+  transportModeLabel,
   paymentStatusLabel,
   formatMoney,
   isPlaceholder,
   isReceived,
+  isApprovedStatus,
+  isDispatchedStatus,
+  SALES_EDITABLE_STATUSES,
+  REJECTABLE_STATUSES,
+  HOLDABLE_STATUSES,
   isReceivingDocCategory,
   refTypeDocument,
   ACCOUNT_EDIT_STATUSES,
@@ -45,6 +56,7 @@ import { downloadOutwardPdf } from "../features/outward/outwardPdf";
 import OutwardDocuments from "../components/OutwardDocuments";
 import AccountOutwardPanel from "../components/AccountOutwardPanel";
 
+import LocationLink from "../components/LocationLink";
 export default function OutwardDetail() {
   const navigate = useNavigate();
   const dispatch = useDispatch();
@@ -80,7 +92,7 @@ export default function OutwardDetail() {
       isSuperAdmin &&
       detailStatus === "succeeded" &&
       outward?.id === id &&
-      outward.workflowStatus === "PENDING_DISPATCH"
+      outward.stage === STAGE.READY_FOR_DISPATCH
     ) {
       navigate(`/outward/${id}/dispatch`, { replace: true });
     }
@@ -107,9 +119,9 @@ export default function OutwardDetail() {
     if (action.fulfilled.match(result)) {
       toast.success(result.payload?.message || (decision === "approve" ? "Approved." : decision === "hold" ? "Put on hold." : "Rejected."));
       setDecision(null);
-      // Super admin: after approving, go straight on to the dispatch details.
+      // Super admin: after approving, stay here - the transportation form comes first.
       if (decision === "approve" && isSuperAdmin) {
-        navigate(`/outward/${id}/dispatch`, { replace: true });
+        dispatch(fetchOutwardById(id));
         return;
       }
       // Account: after approve / hold / reject go back to the outward list.
@@ -148,7 +160,7 @@ export default function OutwardDetail() {
 
   // Super admin + approved entry waiting for dispatch: the redirect to the dispatch form is on its
   // way (see the effect above). Show the same loader instead of flashing this page for a moment.
-  if (isSuperAdmin && outward?.workflowStatus === "PENDING_DISPATCH") {
+  if (isSuperAdmin && outward?.stage === STAGE.READY_FOR_DISPATCH) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-gray-50 text-gray-600">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading outward entry...
@@ -176,20 +188,37 @@ export default function OutwardDetail() {
   // Warehouse managers only get "Pending" / "Dispatched" (dispatchState);
   // everyone else gets the real workflow status.
   const workflow = outward.workflowStatus;
-  const dispatched = isWarehouse ? outward.dispatchState === "Dispatched" : workflow === "DISPATCHED";
-  const awaitingDispatch = isWarehouse ? outward.dispatchState === "Pending" : workflow === "PENDING_DISPATCH";
+  const dispatched = isWarehouse ? outward.dispatchState === "Dispatched" : isDispatchedStatus(workflow);
+  const awaitingDispatch = isWarehouse ? outward.dispatchState === "Pending" : isApprovedStatus(workflow);
   const showCost = !isWarehouse;
   // Until dispatch: Sales can edit, Account can reject. After dispatch Sales / Account / Warehouse are locked out;
   // the Super admin's Update button does everything (sales info, cost, items and dispatch details);
   // the warehouse manager can still update the dispatch details, documents and vehicle number.
   // Sales can view entries the super admin created for their company, but only edit their own.
-  const canEdit = isSuperAdmin || (isSales && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"].includes(workflow));
+  // Once the transportation details are sent AND Account has uploaded its documents the entry is locked
+  // (outward.editLocked, set by the server): Sales can't edit. Account can still approve / reject / hold until dispatch.
+  const locked = Boolean(outward.editLocked) && !isSuperAdmin;
+  const canEdit = isSuperAdmin || (isSales && !locked && SALES_EDITABLE_STATUSES.includes(workflow));
   const canApprove = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(workflow);
-  const canReject = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "ON_HOLD", "PENDING_DISPATCH"].includes(workflow);
-  const canHold = (isAccount || isSuperAdmin) && ["PENDING_APPROVAL", "PENDING_DISPATCH"].includes(workflow);
+  const canReject = (isAccount || isSuperAdmin) && REJECTABLE_STATUSES.includes(workflow);
+  const canHold = (isAccount || isSuperAdmin) && HOLDABLE_STATUSES.includes(workflow);
   // Account, and the Super admin while the entry waits for approval, get the invoice panel with Approve / Hold / Reject at the bottom.
-  const showAccountPanel = isAccount || (isSuperAdmin && ["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(workflow));
-  const canDispatch = (isSuperAdmin && awaitingDispatch) || (isWarehouse && (awaitingDispatch || dispatched));
+  const showAccountPanel = isAccount || (isSuperAdmin && (["PENDING_APPROVAL", "REJECTED", "ON_HOLD"].includes(workflow) || isApprovedStatus(workflow)));
+  const stage = outward.stage;
+  const transportSubmitted = isTransportSubmitted(outward);
+  // Account's documents unlock only after approval AND the warehouse manager's transportation form.
+  const accountDocsEditable = isApprovedStatus(workflow) && transportSubmitted;
+  const accountDocsBlockedMessage =
+    isDispatchedStatus(workflow)
+      ? ""
+      : isApprovedStatus(workflow) && !transportSubmitted
+      ? "Waiting for the warehouse manager to submit the vehicle / transportation details. Documents can be uploaded after that."
+      : isApprovedStatus(workflow)
+      ? ""
+      : "Documents can be uploaded after the entry is approved and the warehouse has submitted the vehicle / transportation details.";
+  // Warehouse manager / Super admin: the three forms (Transportation -> Dispatch -> Receiving).
+  const showFormButtons = isWarehouse || isSuperAdmin;
+  const dispatchOpen = stage === STAGE.READY_FOR_DISPATCH || stage === STAGE.DISPATCHED;
   // Documents: add / upload / replace / delete for the warehouse manager (before and after dispatch)
   // and for the Super admin. Sales / Account never see the section for editing.
   // Documents are saved only after dispatch - before that the dispatch page keeps the picked files.
@@ -200,8 +229,8 @@ export default function OutwardDetail() {
   // The documents section is always on the detail page (empty state when nothing is uploaded).
   // Sales / Account get it once dispatched; the admin from dispatch details onwards; the warehouse manager always.
   // Sales / Account only see their own part, never the documents or dispatch details.
-  const showDocuments = docsStage && (isSuperAdmin || isWarehouse);
-  const showDispatchInfo = isWarehouse || (isSuperAdmin && dispatched);
+  const showDocuments = docsStage && (isSuperAdmin || isWarehouse) && (!isWarehouse || dispatchOpen);
+  const showDispatchInfo = (isWarehouse && dispatchOpen) || (isSuperAdmin && dispatched);
   const received = isReceived(outward);
   const statusStyle = getStatusStyle(outward);
 
@@ -213,7 +242,7 @@ export default function OutwardDetail() {
     document: doc,
     required: false,
   }));
-  const currentStatus = isReceived(outward) ? "Receiving completed" : "Receiving pending";
+  const currentStatus = isReceived(outward) ? "Delivered" : "Delivered pending";
 
   // One row per reference document added on the form (invoice, e-way
   // bill, etc). Older records without a referenceDocuments array fall
@@ -240,7 +269,7 @@ export default function OutwardDetail() {
     <div className="min-h-dvh bg-gray-50">
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 sm:py-5">
-          <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-3 sm:gap-2 sm:text-base sm:mb-4">
+          <button onClick={() => navigate("/outward")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-3 sm:gap-2 sm:text-base sm:mb-4">
             <ArrowLeft size={18} />
             Back
           </button>
@@ -268,15 +297,12 @@ export default function OutwardDetail() {
               {canReject && !showAccountPanel && (
                 <button type="button" onClick={() => openDecision("reject")} className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-red-600 hover:bg-red-50 sm:text-sm"><X size={15} /> Reject</button>
               )}
-              {canDispatch && (
-                <Link to={`/outward/${id}/dispatch`} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-white hover:bg-black sm:text-sm">
-                  <Truck size={15} /> {dispatched ? "Update dispatch details" : "Fill dispatch details"}
-                </Link>
-              )}
-              {dispatched && (isSuperAdmin || isWarehouse) && (
-                <Link to={`/outward/${id}/receiving`} className="flex items-center gap-1.5 rounded-lg border border-gray-900 bg-white px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-gray-900 hover:bg-gray-50 sm:text-sm">
-                  <Calendar size={15} /> {received ? "Update receiving details" : "Fill receiving details"}
-                </Link>
+              {showFormButtons && (
+                <>
+                  <FormButton to={`/outward/${id}/transportation`} icon={<Truck size={15} />} label="Transportation" locked={!stage} lockedHint="Opens after the entry is approved" />
+                  <FormButton to={`/outward/${id}/dispatch`} icon={<FileText size={15} />} label="Dispatch" locked={!dispatchOpen} lockedHint={!stage ? "Opens after the entry is approved" : !transportSubmitted ? "Submit the transportation form first" : "Opens once the account team shares the documents"} />
+                  <FormButton to={`/outward/${id}/receiving`} icon={<Calendar size={15} />} label="Delivered" locked={!dispatched} lockedHint="Opens after dispatch" />
+                </>
               )}
               {canEdit && (
                 <button type="button" onClick={() => navigate(`/outward/${id}/edit`)} className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold text-white hover:bg-black sm:text-sm">Update</button>
@@ -318,14 +344,14 @@ export default function OutwardDetail() {
                     <div className="text-sm font-medium text-gray-900 sm:text-base">-</div>
                   )}
                 </div>
-                <Info label="Ship to - Contact Person" value={outward.shipToContactPerson || "-"} />
-                <Info label="Ship to - Contact No." value={outward.shipToContactNo || "-"} />
-                <Info label="Ship to - Location" value={outward.shipToLocation || "-"} />
-                <Info label="Bill to - Contact Person" value={outward.billToContactPerson || "-"} />
-                <Info label="Bill to - Contact No." value={outward.billToContactNo || "-"} />
-                <Info label="Bill to - Email" value={outward.billToEmail || "-"} />
               </>
             )}
+            <Info label="Ship to - Contact Person" value={outward.shipToContactPerson || "-"} />
+            <Info label="Ship to - Contact No." value={outward.shipToContactNo || "-"} />
+            <Info label="Ship to - Location" value={<LocationLink value={outward.shipToLocation} />} />
+            <Info label="Bill to - Contact Person" value={outward.billToContactPerson || "-"} />
+            <Info label="Bill to - Contact No." value={outward.billToContactNo || "-"} />
+            <Info label="Bill to - Email" value={outward.billToEmail || "-"} />
             <Info
               icon={<Calendar size={18} />}
               label={dispatched && (isSuperAdmin || isWarehouse) ? "Dispatch Date" : "Outward Date"}
@@ -334,9 +360,13 @@ export default function OutwardDetail() {
             {showDispatchInfo && (
               <>
                 <Info icon={<Route size={18} />} label="Dispatch Mode" value={isPlaceholder(outward.dispatchMode) ? "-" : outward.dispatchMode} />
-                <Info icon={<Truck size={18} />} label="Vehicle / AWB Number" value={outward.vehicleNumber || "-"} />
-                <Info icon={<User size={18} />} label="Driver Name" value={outward.driverName || "-"} />
-                <Info label="Driver Contact" value={outward.driverContact || "-"} />
+                {!transportSubmitted && (
+                  <>
+                    <Info icon={<Truck size={18} />} label="Vehicle / AWB Number" value={outward.vehicleNumber || "-"} />
+                    <Info icon={<User size={18} />} label="Driver Name" value={outward.driverName || "-"} />
+                    <Info label="Driver Contact" value={outward.driverContact || "-"} />
+                  </>
+                )}
               </>
             )}
             <Info label="Created By" value={outward.createdBy?.name || outward.createdBy?.email || "-"} />
@@ -378,6 +408,32 @@ export default function OutwardDetail() {
           </div>
           )}
         </div>
+
+        {/* Transportation details: warehouse manager, Account and Super admin (not Sales). */}
+        {transportSubmitted && !isSales && (
+          <div className="rounded-xl border bg-white p-4 sm:p-6">
+            <h2 className="mb-4 text-base font-semibold text-gray-900 sm:text-lg">Transportation</h2>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5">
+              <Info icon={<Route size={18} />} label="Dispatch Mode" value={DISPATCH_MODES.includes(outward.dispatchMode) ? outward.dispatchMode : "-"} />
+              <Info icon={<Truck size={18} />} label="Vehicle Type" value={transportModeLabel(outward.transportMode) || "-"} />
+              {outward.transportMode === "TRANSPORTATION" ? (
+                <>
+                  <Info label="Transporter ID" value={outward.transporterId || "-"} />
+                  <Info icon={<User size={18} />} label="Transporter Name" value={outward.transporterName || "-"} />
+                  <Info label="Transporter Contact" value={outward.transporterContact || "-"} />
+                </>
+              ) : (
+                <>
+                  <Info label="Vehicle No." value={outward.vehicleNumber || "-"} />
+                  <Info icon={<User size={18} />} label="Driver Name" value={outward.driverName || "-"} />
+                  <Info label="Driver Contact" value={outward.driverContact || "-"} />
+                </>
+              )}
+              {outward.transportSubmittedByName && <Info label="Submitted By" value={outward.transportSubmittedByName} />}
+              {outward.transportSubmittedAt && <Info label="Submitted On" value={new Date(outward.transportSubmittedAt).toLocaleString("en-IN")} />}
+            </div>
+          </div>
+        )}
 
         {/* Receiving details - shown only once the warehouse manager has filled them. */}
         {dispatched && showDispatchInfo && received && (
@@ -509,7 +565,10 @@ export default function OutwardDetail() {
           <AccountOutwardPanel
             outwardId={id}
             outward={outward}
-            editable={ACCOUNT_EDIT_STATUSES.includes(workflow)}
+            editable={ACCOUNT_EDIT_STATUSES.includes(workflow) && accountDocsEditable}
+            docsBlockedMessage={accountDocsBlockedMessage}
+            // Reference documents appear only once the transportation details are in (or after dispatch).
+            showReferences={transportSubmitted || isDispatchedStatus(workflow)}
             canApprove={canApprove}
             canReject={canReject}
             canHold={canHold}
@@ -583,5 +642,21 @@ function Info({ icon, label, value }) {
       </div>
       <div className="text-sm font-medium text-gray-900 break-words sm:text-base">{value}</div>
     </div>
+  );
+}
+
+function FormButton({ to, icon, label, locked, lockedHint }) {
+  const cls = "flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] sm:px-3 sm:py-2 font-semibold sm:text-sm";
+  if (locked) {
+    return (
+      <span title={lockedHint} aria-disabled="true" className={`${cls} cursor-not-allowed border border-gray-200 bg-gray-100 text-gray-400`}>
+        <Lock size={14} /> {label}
+      </span>
+    );
+  }
+  return (
+    <Link to={to} className={`${cls} border border-gray-900 bg-white text-gray-900 hover:bg-gray-900 hover:text-white`}>
+      {icon} {label}
+    </Link>
   );
 }

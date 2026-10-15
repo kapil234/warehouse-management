@@ -20,7 +20,7 @@ export const REQUIRED_DOCUMENTS = [
 // -------------------------------------------------
 // Shown to the user as: Invoice / E-way Bill / DC Challan / Other ("Other (Accounts)" is stored under that
 // name so it never clashes with the warehouse manager's "Other").
-export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"];
+export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Without Invoice", "Other (Accounts)"];
 const ACCOUNT_REF_OWNED = ACCOUNT_REF_TYPES;
 export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Bilty", "Other"];
 // No account document is compulsory to upload: each reference type chosen just gets its own (optional)
@@ -33,6 +33,7 @@ const REF_TYPE_DOCUMENT = {
   Invoice: "Invoice",
   "E-way Bill": "E-way bill",
   "DC Challan": "DC challan",
+  "Without Invoice": "Without invoice",
   // Account's "Other" is stored as "Accounts other" (shown as "Other") so it never clashes with the manager's "Other".
   "Other (Accounts)": "Accounts other",
   "Delivery Challan": "Delivery challan",
@@ -42,7 +43,7 @@ const REF_TYPE_DOCUMENT = {
 };
 export const refTypeDocument = (type) => REF_TYPE_DOCUMENT[type] || null;
 export const refNumberLabel = (type) =>
-  type === "Invoice" ? "Invoice no." : type === "E-way Bill" ? "E-way bill no." : type === "DC Challan" ? "Challan no." : "Reference doc no.";
+  type === "Invoice" ? "Invoice no." : type === "E-way Bill" ? "E-way bill no." : type === "DC Challan" ? "Challan no." : type === "Without Invoice" ? "Reference no." : "Reference doc no.";
 
 // Above this PI amount (Rs.) an e-way bill number or the e-way bill document is required before approval.
 export const EWAY_BILL_THRESHOLD = 100000;
@@ -59,18 +60,61 @@ export const RECEIVING_REQUIRED_DOCUMENT = "Receiving copy";
 export const RECEIVING_ADD_MENU = ["Receiving photo", "Other"];
 export const RECEIVING_DOC_PREFIX = "Receiving ";
 export const isReceivingDocCategory = (category) => /^receiving/i.test(String(category || "").trim());
-export const isReceived = (outward) => Boolean(outward?.receivedAt || outward?.receivedDate);
+export const isReceived = (outward) => outward?.workflowStatus === "DELIVERED" || Boolean(outward?.receivedAt || outward?.receivedDate);
 export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
 
 const sameText = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
 export const isAccountRef = (ref) => ACCOUNT_REF_OWNED.some((t) => sameText(t, ref?.refDocType));
 export const isManagerRef = (ref) => !isAccountRef(ref);
-export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|accounts other)/i.test(String(category || "").trim());
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
 // "Accounts other - GST certificate" -> "Other - GST certificate"
 export const docLabel = (category) => String(category || "Document").replace(/^accounts other/i, "Other");
 
 // Account may add / replace / delete its documents until the entry is dispatched.
-export const ACCOUNT_EDIT_STATUSES = ["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH"];
+// Only while approved + waiting for dispatch, and only once the warehouse manager has submitted the transportation form.
+export const ACCOUNT_EDIT_STATUSES = ["PENDING_DISPATCH", "DOCS_PENDING", "READY_FOR_DISPATCH"];
+
+// -------------------------------------------------
+// Saved workflow statuses (the server stores every step; PENDING_DISPATCH is the old "approved" value)
+// -------------------------------------------------
+export const APPROVED_STATUSES = ["PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"];
+export const DISPATCHED_STATUSES = ["DISPATCHED", "DELIVERED"];
+export const isApprovedStatus = (status) => APPROVED_STATUSES.includes(status);
+export const isDispatchedStatus = (status) => DISPATCHED_STATUSES.includes(status);
+// Sales can edit until the entry is locked (the server also sends `editLocked`).
+// Account can reject / hold / approve at any step until the dispatch is done (the lock does not apply to Account).
+export const SALES_EDITABLE_STATUSES = ["PENDING_APPROVAL", "REJECTED", "ON_HOLD", "PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING"];
+export const REJECTABLE_STATUSES = ["PENDING_APPROVAL", "ON_HOLD", "PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"];
+export const HOLDABLE_STATUSES = ["PENDING_APPROVAL", "PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"];
+
+// -------------------------------------------------
+// Stages after approval (sent by the server as `stage`)
+//   TRANSPORT_PENDING -> DOCS_PENDING -> READY_FOR_DISPATCH -> DISPATCHED (then receiving)
+// -------------------------------------------------
+export const STAGE = {
+  TRANSPORT_PENDING: "TRANSPORT_PENDING",
+  DOCS_PENDING: "DOCS_PENDING",
+  READY_FOR_DISPATCH: "READY_FOR_DISPATCH",
+  DISPATCHED: "DISPATCHED",
+};
+export const STAGE_STYLE = {
+  TRANSPORT_PENDING: { label: "Awaiting transportation", cls: "bg-blue-100 text-blue-700" },
+  DOCS_PENDING: { label: "Awaiting acc. documents", cls: "bg-indigo-100 text-indigo-700" },
+  READY_FOR_DISPATCH: { label: "Ready for dispatch", cls: "bg-teal-100 text-teal-700" },
+};
+export const isTransportSubmitted = (outward) => Boolean(outward?.transportSubmittedAt);
+export const TRANSPORT_MODES = [
+  { value: "DEDICATED", label: "Dedicated vehicle" },
+  { value: "TRANSPORTATION", label: "Transportation" },
+];
+export const transportModeLabel = (value) => TRANSPORT_MODES.find((m) => m.value === value)?.label || "";
+// Dispatch mode picked on the transportation form (optional).
+export const DISPATCH_MODES = ["By Road", "Courier", "Customer Pickup"];
+// Account documents that release the entry to the warehouse manager: all except the Invoice, which stays with Account.
+export const isReleaseDocCategory = (category) => /^(e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
+export const isInvoiceDocCategory = (category) => /^invoice/i.test(String(category || "").trim());
+// Account reference types that release the entry: everything except the Invoice (an Invoice alone stays internal).
+export const isReleaseRefType = (type) => Boolean(String(type || "").trim()) && !/^invoice/i.test(String(type).trim());
 
 const totalCostOf = (items) => items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
 
@@ -170,6 +214,10 @@ export function formatOutwardEntry(outward, index) {
     requiredDocuments: statusData.requiredDocuments,
     items,
     workflowStatus: outward.workflowStatus || null,
+    stage: outward.stage || null,
+    invoiceCreated: Boolean(outward.invoiceCreated),
+    editLocked: Boolean(outward.editLocked),
+    editLockReason: outward.editLockReason || null,
     dispatchState: outward.dispatchState || null,
     totalCost: totalCostOf(items),
     piNumber: outward.piNumber || "",
@@ -188,6 +236,10 @@ export function formatOutwardEntry(outward, index) {
     vehicleNumber: outward.vehicleNumber || outward.vehicle_number || "",
     driverName: outward.driverName || "",
     driverContact: outward.driverContact || "",
+    transportMode: outward.transportMode || "",
+    transporterId: outward.transporterId || "",
+    transporterName: outward.transporterName || "",
+    transporterContact: outward.transporterContact || "",
     receivedDate: outward.receivedDate || null,
     receivedAt: outward.receivedAt || null,
     remarks: outward.remarks || "",
@@ -213,7 +265,11 @@ export const paymentStatusLabel = (value) =>
 export const WORKFLOW_STATUS = {
   PENDING_APPROVAL: { label: "Pending approval", cls: "bg-amber-100 text-amber-700" },
   PENDING_DISPATCH: { label: "Pending dispatch", cls: "bg-blue-100 text-blue-700" },
-  DISPATCHED: { label: "Dispatched", cls: "bg-green-100 text-green-700" },
+  TRANSPORT_PENDING: { label: "Awaiting transportation", cls: "bg-blue-100 text-blue-700" },
+  DOCS_PENDING: { label: "Awaiting acc. documents", cls: "bg-indigo-100 text-indigo-700" },
+  READY_FOR_DISPATCH: { label: "Ready for dispatch", cls: "bg-teal-100 text-teal-700" },
+  DISPATCHED: { label: "Delivered pending", cls: "bg-amber-100 text-amber-700" },
+  DELIVERED: { label: "Delivered", cls: "bg-green-100 text-green-700" },
   REJECTED: { label: "Rejected", cls: "bg-red-100 text-red-600" },
   ON_HOLD: { label: "On hold", cls: "bg-purple-100 text-purple-700" },
 };
@@ -226,18 +282,23 @@ export const DISPATCH_STATE = {
 };
 
 // Once dispatched, EVERY role sees the receiving state instead of plain "Dispatched":
-// "Receiving pending" until the receiving form is filled, then "Receiving completed".
+// "Delivered pending" until the receiving form is filled, then "Delivered".
 export const RECEIVING_STATE = {
-  pending: { label: "Receiving pending", cls: "bg-amber-100 text-amber-700" },
-  completed: { label: "Receiving completed", cls: "bg-green-100 text-green-700" },
+  pending: { label: "Delivered pending", cls: "bg-amber-100 text-amber-700" },
+  completed: { label: "Delivered", cls: "bg-green-100 text-green-700" },
 };
+
+export const INVOICE_CREATED_STYLE = { label: "Invoice created", cls: "bg-sky-100 text-sky-700" };
 
 export const getStatusStyle = (outward) => {
   if (!outward) return null;
   const dispatched = outward.workflowStatus
-    ? outward.workflowStatus === "DISPATCHED"
+    ? isDispatchedStatus(outward.workflowStatus)
     : outward.dispatchState === "Dispatched";
   if (dispatched) return isReceived(outward) ? RECEIVING_STATE.completed : RECEIVING_STATE.pending;
+  // Account created the invoice (never sent to the warehouse manager): the status moves on from "Awaiting acc. documents".
+  if (outward.invoiceCreated && outward.stage === "DOCS_PENDING") return INVOICE_CREATED_STYLE;
+  if (outward.stage && STAGE_STYLE[outward.stage]) return STAGE_STYLE[outward.stage];
   return outward.workflowStatus ? WORKFLOW_STATUS[outward.workflowStatus] : DISPATCH_STATE[outward.dispatchState];
 };
 

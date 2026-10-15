@@ -4,6 +4,8 @@ import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
 import { saveAccountDocuments } from "../features/outward/outwardSlice";
 import {
+  isReleaseDocCategory,
+  isReleaseRefType,
   ACCOUNT_REF_TYPES,
   ACCOUNT_DOC_PREFIX,
   EWAY_BILL_THRESHOLD,
@@ -26,12 +28,16 @@ import OutwardDocuments from "./OutwardDocuments";
  * Other - and, if it wants, uploads the matching document. Every reference type that is chosen gets its own
  * row in the Documents section, but uploading is never compulsory.
  *
- * One exception: when the PI amount is above Rs. 1,00,000 the e-way bill is needed - either the e-way bill
- * number (reference type "E-way Bill") or the e-way bill document - before the entry can be approved.
+ * Documents can be added ONLY after the entry is approved and the warehouse manager has submitted the vehicle /
+ * transportation form (`docsBlockedMessage` says why they are locked). Before that Account only decides
+ * (Approve / Hold / Reject).
  *
- * Approve / Reject / Hold: whatever is typed or picked is saved first. Only until dispatch.
- * The warehouse manager has its own reference documents (delivery challan, return note, other)
- * and sees these ones read-only.
+ * Sharing: an Invoice on its own stays with the account team. Uploading a "DC challan" or "Without invoice"
+ * document shares the entry with the warehouse manager and opens their dispatch form.
+ * When the PI amount is above Rs. 1,00,000 the e-way bill document is needed before that.
+ *
+ * Approve / Reject / Hold: whatever is typed or picked is saved first (when documents are editable).
+ * The warehouse manager has its own reference documents (delivery challan, return note, other).
  * =========================================================
  */
 
@@ -61,7 +67,7 @@ const signature = (rows) =>
       ])
   );
 
-export default function AccountOutwardPanel({ outwardId, outward, editable, canApprove = false, canReject = false, canHold = false, onDecision }) {
+export default function AccountOutwardPanel({ outwardId, outward, editable, docsBlockedMessage = "", showReferences = true, canApprove = false, canReject = false, canHold = false, onDecision }) {
   const dispatch = useDispatch();
   const [references, setReferences] = useState(() => fromServer(outward));
   const [stagedDocs, setStagedDocs] = useState([]);
@@ -106,7 +112,10 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
   }, [references, aboveLimit]);
 
   const ewayProvided = hasEwayDocument(accountDocs, stagedDocs);
-  const EWAY_MESSAGE = `The PI amount is above ₹${EWAY_BILL_THRESHOLD.toLocaleString("en-IN")}: upload the e-way bill document before approving.`;
+  const EWAY_MESSAGE = `The PI amount is above ₹${EWAY_BILL_THRESHOLD.toLocaleString("en-IN")}: upload the e-way bill document before sharing the documents with the warehouse.`;
+  // Shared once Account has any non-Invoice document (file) or any saved non-Invoice reference (E-way Bill / DC Challan / ...).
+  const sharedWithWarehouse =
+    accountDocs.some((d) => isReleaseDocCategory(d.docCategory)) || readOnlyRefs.some((r) => isReleaseRefType(r.refDocType));
 
   const handleSave = async () => {
     if (saving) return false;
@@ -140,15 +149,51 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
 
   // Approve / Reject / Hold: anything typed or picked above is saved first.
   const handleDecision = async (type) => {
-    if (type === "approve" && aboveLimit && !ewayProvided) return toast.error(EWAY_MESSAGE);
-    if (dirty && !(await handleSave())) return;
+    if (editable && dirty && !(await handleSave())) return;
     onDecision?.(type);
   };
 
-  // ---------------- read-only (after dispatch) ----------------
+  const decisionButtons = (
+    <>
+        {canReject && (
+        <button
+          type="button"
+          onClick={() => handleDecision("reject")}
+          disabled={saving}
+          className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+        >
+          <X size={16} /> Reject
+        </button>
+      )}
+      {canHold && (
+        <button
+          type="button"
+          onClick={() => handleDecision("hold")}
+          disabled={saving}
+          className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-white px-5 py-2.5 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50"
+        >
+          <Pause size={16} /> Hold
+        </button>
+      )}
+      {canApprove && (
+        <button
+          type="button"
+          onClick={() => handleDecision("approve")}
+          disabled={saving}
+          className="flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Approve
+        </button>
+      )}
+    </>
+  );
+  const hasDecision = canApprove || canReject || canHold;
+
+  // ---------------- read-only (locked / after dispatch) ----------------
   if (!editable) {
     return (
       <div className="space-y-4">
+        {showReferences && (
         <div className="bg-white rounded-xl border p-4 sm:p-6">
           <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg">Reference documents</h2>
           <div className="overflow-x-auto rounded-lg border">
@@ -173,13 +218,20 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
             </table>
           </div>
         </div>
-        <OutwardDocuments
-          outwardId={outwardId}
-          documents={accountDocs}
-          requiredDocuments={[]}
-          title="Documents"
-          subtitle="Invoice, e-way bill, DC challan and other account documents"
-        />
+        )}
+        {docsBlockedMessage && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 sm:text-sm">{docsBlockedMessage}</div>
+        )}
+        {(accountDocs.length > 0 || !docsBlockedMessage) && (
+          <OutwardDocuments
+            outwardId={outwardId}
+            documents={accountDocs}
+            requiredDocuments={[]}
+            title="Documents"
+            subtitle="Invoice, e-way bill, DC challan, without invoice and other account documents"
+          />
+        )}
+        {hasDecision && <div className="flex flex-wrap items-center justify-end gap-3">{decisionButtons}</div>}
       </div>
     );
   }
@@ -202,6 +254,16 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
           </button>
         </div>
 
+        <div
+          className={`mb-4 rounded-lg border px-3 py-2.5 text-xs sm:text-sm ${
+            sharedWithWarehouse ? "border-green-200 bg-green-50 text-green-700" : "border-blue-200 bg-blue-50 text-blue-800"
+          }`}
+        >
+          {sharedWithWarehouse
+            ? "Shared with the warehouse manager - their dispatch form is open. The Invoice is never shown to them."
+            : "Vehicle details received. An Invoice stays with the account team only. Upload any other document (e-way bill, DC challan, Without invoice or other) to share the entry with the warehouse manager and open their dispatch form."}
+        </div>
+
         {aboveLimit && (
           <div
             className={`mb-4 rounded-lg border px-3 py-2.5 text-xs sm:text-sm ${
@@ -210,7 +272,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
           >
             {ewayProvided
               ? "E-way bill provided (the PI amount is above ₹1,00,000)."
-              : `${EWAY_MESSAGE.replace(" before approving.", ".")} Required before approving.`}
+              : `${EWAY_MESSAGE.replace(" before sharing the documents with the warehouse.", ".")} Required before sharing with the warehouse.`}
           </div>
         )}
 
@@ -252,11 +314,11 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
         onStagedChange={setStagedDocs}
         requiredDocuments={aboveLimit ? ["E-way bill"] : []}
         optionalDocuments={documentSlots.filter((s) => !(aboveLimit && /^e-?way/i.test(s)))}
-        addMenuTypes={["Invoice", "E-way bill", "DC challan", "Other"]}
+        addMenuTypes={["Invoice", "E-way bill", "DC challan", "Without invoice", "Other"]}
         otherPrefix={ACCOUNT_DOC_PREFIX}
         showSummary={false}
         title="Documents"
-        subtitle="One row for each reference document above. E-way bill upload is required when the PI amount is above ₹1,00,000. Files are saved when you approve, hold or reject."
+        subtitle="One row for each reference document above. Every document except the Invoice is shared with the warehouse manager. E-way bill upload is required first when the PI amount is above ₹1,00,000."
       />
 
       <div className="flex flex-wrap items-center justify-end gap-3">
@@ -270,36 +332,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
             {saving && <Loader2 size={16} className="animate-spin" />} Save documents
           </button>
         )}
-        {canReject && (
-          <button
-            type="button"
-            onClick={() => handleDecision("reject")}
-            disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-          >
-            <X size={16} /> Reject
-          </button>
-        )}
-        {canHold && (
-          <button
-            type="button"
-            onClick={() => handleDecision("hold")}
-            disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg border border-purple-200 bg-white px-5 py-2.5 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50"
-          >
-            <Pause size={16} /> Hold
-          </button>
-        )}
-        {canApprove && (
-          <button
-            type="button"
-            onClick={() => handleDecision("approve")}
-            disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Approve
-          </button>
-        )}
+        {decisionButtons}
       </div>
     </div>
   );

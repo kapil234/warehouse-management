@@ -281,6 +281,19 @@ export const dispatchOutward = createAsyncThunk(
   }
 );
 
+// Warehouse manager: transportation form (dedicated vehicle OR transporter). Unlocks the account team's documents.
+export const saveOutwardTransportation = createAsyncThunk(
+  "outward/saveTransportation",
+  async ({ id, payload }, { rejectWithValue }) => {
+    try {
+      const { data } = await apiClient.put(`/api/outward/${id}/transportation`, payload);
+      return data;
+    } catch (err) {
+      return rejectWithValue(err.response?.data?.message || "Failed to save transportation details");
+    }
+  }
+);
+
 // Warehouse manager: receiving details (date, receiver, remarks) together with the picked receiving documents.
 export const saveOutwardReceiving = createAsyncThunk(
   "outward/saveReceiving",
@@ -550,7 +563,7 @@ const outwardSlice = createSlice({
       // or the dispatch page would bounce the admin back to the details page.
       .addCase(approveOutward.fulfilled, (state, action) => {
         if (state.current && state.current.id === action.meta.arg.id) {
-          state.current.workflowStatus = "PENDING_DISPATCH";
+          state.current.workflowStatus = action.payload?.data?.workflowStatus || "TRANSPORT_PENDING";
         }
       })
 
@@ -562,6 +575,12 @@ const outwardSlice = createSlice({
 
       // Dispatch details saved / updated: the response is the refreshed entry.
       .addCase(dispatchOutward.fulfilled, (state, action) => {
+        const entry = action.payload?.data;
+        if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
+      })
+
+      // Transportation form saved: the response is the refreshed entry.
+      .addCase(saveOutwardTransportation.fulfilled, (state, action) => {
         const entry = action.payload?.data;
         if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
       })

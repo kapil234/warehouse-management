@@ -97,8 +97,8 @@ function formatDateRangeLabel({ preset, from, to }) {
   return `${formatShortDate(from)} \u2013 ${formatShortDate(to)}`;
 }
 
-// Workflow status of an entry. Warehouse managers only ever get
-// "Pending" / "Dispatched" (never the approval side), everyone else the full status.
+// Workflow status of an entry, step by step:
+// Pending approval -> Awaiting transportation -> Awaiting acc. documents -> Ready for dispatch -> Dispatched.
 function WorkflowBadge({ item }) {
   const style = getStatusStyle(item);
   if (!style) return null;
@@ -113,15 +113,22 @@ function WorkflowBadge({ item }) {
 const STATUS_FILTERS_FULL = [
   { value: "", label: "All status" },
   { value: "PENDING_APPROVAL", label: "Pending approval" },
-  { value: "PENDING_DISPATCH", label: "Pending dispatch" },
-  { value: "DISPATCHED", label: "Dispatched" },
+  { value: "TRANSPORT_PENDING", label: "Awaiting transportation" },
+  { value: "DOCS_PENDING", label: "Awaiting acc. documents" },
+  { value: "READY_FOR_DISPATCH", label: "Ready for dispatch" },
+  { value: "DISPATCHED", label: "Delivered pending" },
+  { value: "DELIVERED", label: "Delivered" },
   { value: "ON_HOLD", label: "On hold" },
   { value: "REJECTED", label: "Rejected" },
 ];
 const STATUS_FILTERS_WAREHOUSE = [
   { value: "", label: "All status" },
-  { value: "PENDING_DISPATCH", label: "Pending dispatch" },
-  { value: "DISPATCHED", label: "Dispatched" },
+  { value: "PENDING_APPROVAL", label: "Pending approval" },
+  { value: "TRANSPORT_PENDING", label: "Awaiting transportation" },
+  { value: "DOCS_PENDING", label: "Awaiting acc. documents" },
+  { value: "READY_FOR_DISPATCH", label: "Ready for dispatch" },
+  { value: "DISPATCHED", label: "Delivered pending" },
+  { value: "DELIVERED", label: "Delivered" },
 ];
 
 const DATE_PRESETS = [
@@ -390,11 +397,14 @@ export default function Outward() {
   // These three read off the current page only - a full across-all-pages
   // figure would need its own aggregate endpoint.
   const documentsPending = outwardData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
-  const countStatus = (workflow, dispatchState) =>
-    outwardData.filter((item) => (item.workflowStatus ? item.workflowStatus === workflow : item.dispatchState === dispatchState)).length;
   const awaitingApproval = outwardData.filter((item) => item.workflowStatus === "PENDING_APPROVAL").length;
-  const awaitingDispatch = countStatus("PENDING_DISPATCH", "Pending");
-  const dispatchedCount = countStatus("DISPATCHED", "Dispatched");
+  // Approved but not dispatched yet = every step between approval and dispatch.
+  const awaitingDispatch = outwardData.filter((item) =>
+    item.workflowStatus ? ["PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"].includes(item.workflowStatus) : item.dispatchState === "Pending"
+  ).length;
+  const dispatchedCount = outwardData.filter((item) =>
+    item.workflowStatus ? ["DISPATCHED", "DELIVERED"].includes(item.workflowStatus) : item.dispatchState === "Dispatched"
+  ).length;
 
   const goToPage = (next) => {
     const clamped = Math.min(Math.max(next, 1), pagination.totalPages || 1);
@@ -406,16 +416,9 @@ export default function Outward() {
       alert("Outward ID is missing");
       return;
     }
-    // Waiting for dispatch: the warehouse manager and the super admin open the dispatch page
-    // (the super admin also gets the sales / cost information and an Update button there).
-    // Dispatched (or any other status / role): open the outward details page.
-    const pendingDispatch = isWarehouseRole
-      ? item.dispatchState === "Pending"
-      : item.workflowStatus === "PENDING_DISPATCH";
-    if (pendingDispatch && (isWarehouseRole || role === "SUPER_ADMIN")) {
-      navigate(`/outward/${item.id}/dispatch`);
-      return;
-    }
+    // Every entry opens its details page. For the warehouse manager and the super admin that page is the hub of the
+    // three forms (Transportation -> Dispatch -> Receiving); the super admin lands on the dispatch form directly
+    // once it is open (see OutwardDetail).
     navigate(`/outward/${item.id}`);
   };
 
@@ -429,7 +432,7 @@ export default function Outward() {
               {role === "ACCOUNT"
                 ? "Review the payment details and approve outgoing stock"
                 : isWarehouseRole
-                ? "Approved entries waiting for dispatch"
+                ? "Entries from approval to dispatch"
                 : "View and manage all outgoing stock"}
             </p>
           </div>

@@ -17,8 +17,12 @@ enum Role {
 
 enum OutwardStatus {
   PENDING_APPROVAL   // created by Sales, waiting for the Account team
-  PENDING_DISPATCH   // approved by Account, waiting for the Warehouse manager
-  DISPATCHED         // Warehouse manager filled dispatch details
+  PENDING_DISPATCH   // LEGACY: old "approved" value. Rows are moved to TRANSPORT_PENDING / DOCS_PENDING / READY_FOR_DISPATCH by the backfill migration; no new rows use it
+  TRANSPORT_PENDING  // approved by Account, waiting for the Warehouse manager's transportation details
+  DOCS_PENDING       // transportation sent, waiting for the Account team's documents (DC Challan / Without Invoice releases it)
+  READY_FOR_DISPATCH // transportation + Account documents done, Warehouse manager can fill the dispatch form. Locked for Sales / Account edits.
+  DISPATCHED         // Warehouse manager filled dispatch details ("Delivered pending" in the UI)
+  DELIVERED          // receiving form filled
   REJECTED           // Account rejected it; Sales can edit + resubmit
   ON_HOLD            // Account put it on hold (reason given); Account can approve / reject later, Sales can edit + resubmit
 }
@@ -236,6 +240,14 @@ model Min {
    // Dispatch details (warehouse manager)
   driverName    String?
   driverContact String?
+   transportMode            String?    // DEDICATED | TRANSPORTATION
+  transporterId            String?    // when transportMode = TRANSPORTATION
+  transporterName          String?    // when transportMode = TRANSPORTATION
+  transporterContact       String?    // when transportMode = TRANSPORTATION
+  transportSubmittedById   String?
+  transportSubmittedByName String?
+  transportSubmittedAt     DateTime?  // null = transportation form still pending
+
 
   // Receiving details (warehouse manager, after dispatch)
   receivedDate     DateTime?   // receiving date picked from the calendar

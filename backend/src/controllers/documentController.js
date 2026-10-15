@@ -1,7 +1,7 @@
 import prisma from "../config/prisma.js";
 import { supabase, SUPABASE_BUCKET } from "../config/supabase.js";
 import { recordAuditLog } from "../utils/auditLog.js";
-import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, outwardFolder, isAccountDocCategory, ACCOUNT_DOC_STATUSES } from "../utils/outwardWorkflow.js";
+import { isFinanceSide, getUserCompanyIds, WAREHOUSE_VISIBLE_STATUSES, STATUS, outwardFolder, isAccountDocCategory, isInvoiceDocCategory, hasReleaseDocument, ACCOUNT_DOC_STATUSES, isApprovedStatus, isDispatchedStatus, syncApprovedStage } from "../utils/outwardWorkflow.js";
  
 // assertLinkedEntryAccess used to be 3 sequential round-trips (entry, then
 // its warehouse, then the caller's warehouse access) plus a 4th one later
@@ -36,7 +36,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
 
   if (req.user.role === "SUPER_ADMIN") {
     // The documents section only exists from dispatch details onwards.
-    if (linkedType === "outward" && ![STATUS.PENDING_DISPATCH, STATUS.DISPATCHED].includes(entry.status)) {
+    if (linkedType === "outward" && !(isApprovedStatus(entry.status) || isDispatchedStatus(entry.status))) {
       throw Object.assign(new Error("Documents are available after approval."), { status: 409 });
     }
     return entry;
@@ -56,7 +56,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
       if (!isAccountDocCategory(category)) {
         throw Object.assign(new Error("Account can only manage invoice, e-way bill and other account documents."), { status: 403 });
       }
-    } else if (entry.status !== STATUS.DISPATCHED && !isAccountDocCategory(category)) {
+    } else if (!isDispatchedStatus(entry.status) && !isAccountDocCategory(category)) {
       throw Object.assign(new Error("Dispatch documents are available after dispatch."), { status: 403 });
     }
     return entry;
@@ -70,7 +70,7 @@ async function assertLinkedEntryAccess(req, linkedType, linkedId, permission = n
       throw Object.assign(new Error("You don't have access to this document."), { status: 403 });
     }
     // Dispatch documents open up only after the warehouse manager has dispatched.
-    if (linkedType === "outward" && entry.status !== STATUS.DISPATCHED) {
+    if (linkedType === "outward" && !isDispatchedStatus(entry.status)) {
       throw Object.assign(new Error("Dispatch documents are available after dispatch."), { status: 403 });
     }
     return entry;
@@ -99,6 +99,7 @@ function baseName(category) {
   const c = category.toLowerCase();
   if (c.includes("receiving")) return "receiving";
   if (c.includes("bilty")) return "bilty";
+  if (c.includes("without")) return "without-invoice";
   if (c.includes("invoice")) return "invoice";
   if (c.includes("e-way") || c.includes("eway")) return "eway-bill";
   if (c.includes("challan")) return "delivery-challan";
@@ -154,7 +155,7 @@ async function uploadLinkedDocument(req, res, linkedType) {
     const entry = await assertLinkedEntryAccess(req, linkedType, id, permission);
 
     // Dispatch documents are saved only once the entry has been dispatched.
-    if (linkedType === "outward" && entry.status !== STATUS.DISPATCHED) {
+    if (linkedType === "outward" && !isDispatchedStatus(entry.status)) {
       return res.status(409).json({ message: "Documents can be saved only after the entry is dispatched." });
     }
  
@@ -221,7 +222,13 @@ export async function downloadDocument(req, res) {
   try {
     const document = await prisma.document.findUnique({ where: { id: req.params.id } });
     if (!document) return res.status(404).json({ message: "Document not found." });
-    await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, null, document.docCategory);
+    const linked = await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, null, document.docCategory);
+    // The warehouse manager never gets the Invoice, and Account's other documents as soon as they exist. Checked here too so a direct document id cannot bypass the list.
+    if (document.linkedType === "outward" && req.user.role === "WAREHOUSE_MANAGER" && isAccountDocCategory(document.docCategory)) {
+      if (isInvoiceDocCategory(document.docCategory) || !(isApprovedStatus(linked.status) || isDispatchedStatus(linked.status))) {
+        return res.status(403).json({ message: "You don't have access to this document." });
+      }
+    }
     const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).createSignedUrl(document.fileKey, 60 * 5);
     if (error) return res.status(500).json({ message: "Failed to create download link.", error: error.message });
     return res.json({ message: "Download link created", data: { url: data.signedUrl } });
@@ -242,6 +249,8 @@ export async function deleteDocument(req, res) {
     const { error } = await supabase.storage.from(SUPABASE_BUCKET).remove([document.fileKey]);
     if (error) return res.status(500).json({ message: "Failed to delete file from storage.", error: error.message });
     await prisma.document.delete({ where: { id: document.id } });
+    // Account removing its release document sends the entry back from READY_FOR_DISPATCH to DOCS_PENDING.
+    if (document.linkedType === "outward") await syncApprovedStage(prisma, document.linkedId).catch((err) => console.error("Stage sync failed:", err));
  
     // Same as upload: the delete already succeeded, so don't make the
     // caller wait on the audit log write too.

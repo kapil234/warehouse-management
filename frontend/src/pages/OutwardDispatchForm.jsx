@@ -167,7 +167,7 @@ export default function OutwardDispatchForm() {
   }
 
   const items = outward.items || [];
-  const alreadyDispatched = outward.dispatchState === "Dispatched" || outward.workflowStatus === "DISPATCHED";
+  const alreadyDispatched = outward.dispatchState === "Dispatched" || ["DISPATCHED", "DELIVERED"].includes(outward.workflowStatus);
 
   return (
     <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">

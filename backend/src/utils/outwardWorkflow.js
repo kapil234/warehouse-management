@@ -17,6 +17,22 @@ import prisma from "../config/prisma.js";
  *                        header fields (customer, type ...) keeps PENDING_DISPATCH.
  *   WAREHOUSE_MANAGER --dispatch (details + documents)--> DISPATCHED
  *
+ * AFTER APPROVAL the status is SAVED in the database and moves through these steps (see syncApprovedStage):
+ *
+ *   TRANSPORT_PENDING   warehouse manager must fill the Transportation form (dedicated vehicle OR transporter)
+ *   DOCS_PENDING        Account can now upload Invoice / E-way bill / DC Challan / Without Invoice / Other.
+ *                       The Invoice is internal: it is NEVER shared with the warehouse.
+ *                       Any other document (E-way bill / DC Challan / Without Invoice / Other) releases the entry to the warehouse.
+ *   READY_FOR_DISPATCH  Dispatch form opens for the manager (vehicle / driver read-only, references, documents, serial scan)
+ *   DISPATCHED          Dispatch details saved ("Delivered pending"); Receiving form opens
+ *   DELIVERED           Receiving form saved
+ *
+ * (PENDING_DISPATCH is the old single "approved" value. It is kept in the enum only so old rows stay valid; the
+ * backfill migration moves them, and the code still treats it like an approved entry.)
+ *
+ * EDIT LOCK: once the transportation details are sent AND Account has uploaded its documents, Sales / Account can no
+ * longer update, reject or hold the entry (see editLockReason). Only the Super admin can still change it.
+ *
  * Warehouse only sees PENDING_DISPATCH / DISPATCHED entries.
  * Dispatch documents are visible to Sales / Account only once DISPATCHED.
  * After DISPATCHED Sales / Account are locked out; the WAREHOUSE_MANAGER can still update the dispatch
@@ -28,28 +44,42 @@ import prisma from "../config/prisma.js";
 
 export const STATUS = {
   PENDING_APPROVAL: "PENDING_APPROVAL",
-  PENDING_DISPATCH: "PENDING_DISPATCH",
+  PENDING_DISPATCH: "PENDING_DISPATCH", // legacy "approved" value
+  TRANSPORT_PENDING: "TRANSPORT_PENDING",
+  DOCS_PENDING: "DOCS_PENDING",
+  READY_FOR_DISPATCH: "READY_FOR_DISPATCH",
   DISPATCHED: "DISPATCHED",
+  DELIVERED: "DELIVERED",
   REJECTED: "REJECTED",
   ON_HOLD: "ON_HOLD",
 };
 
+// Approved by Account, not dispatched yet (PENDING_DISPATCH = old rows).
+export const APPROVED_STATUSES = [STATUS.PENDING_DISPATCH, STATUS.TRANSPORT_PENDING, STATUS.DOCS_PENDING, STATUS.READY_FOR_DISPATCH];
+// Dispatched (delivery pending) or delivered.
+export const DISPATCHED_STATUSES = [STATUS.DISPATCHED, STATUS.DELIVERED];
+export const isDispatchedStatus = (status) => DISPATCHED_STATUSES.includes(status);
+export const isApprovedStatus = (status) => APPROVED_STATUSES.includes(status);
+
 export const PAYMENT_STATUSES = ["COMPLETED", "PARTIALLY_COMPLETED", "PENDING"];
 
 // Statuses the warehouse manager is allowed to see at all.
-export const WAREHOUSE_VISIBLE_STATUSES = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED];
+// The warehouse manager sees an entry (items, ship to / bill to, customer) as soon as Sales creates it - it just can't
+// open any form until Account approves. Rejected entries are hidden (Sales is still fixing them).
+export const WAREHOUSE_VISIBLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.ON_HOLD, ...APPROVED_STATUSES, ...DISPATCHED_STATUSES];
 
 // Sales may edit until dispatch; Account may reject until dispatch.
-export const SALES_EDITABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
-export const REJECTABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
-// Account can put a pending / approved entry on hold until it is dispatched.
-export const HOLDABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.PENDING_DISPATCH];
+// READY_FOR_DISPATCH (and DOCS_PENDING once Account has uploaded documents - see editLockReason) is locked.
+export const SALES_EDITABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH, STATUS.TRANSPORT_PENDING, STATUS.DOCS_PENDING];
+export const REJECTABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH, STATUS.TRANSPORT_PENDING, STATUS.DOCS_PENDING, STATUS.READY_FOR_DISPATCH];
+// Account can reject / hold an entry at ANY step until the dispatch is completely done (the edit lock does not apply to Account decisions).
+export const HOLDABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.PENDING_DISPATCH, STATUS.TRANSPORT_PENDING, STATUS.DOCS_PENDING, STATUS.READY_FOR_DISPATCH];
 // Account can approve a pending entry, or change its mind and approve a rejected / held one.
 export const APPROVABLE_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD];
 
 // Audit-log actions the warehouse manager must NOT see (PI / payment / approval side).
 // COST_UPDATED is kept so older history rows stay hidden.
-export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED", "PAYMENT_UPDATED", "PI_UPDATED", "PARTY_UPDATED", "ON_HOLD"];
+export const HIDDEN_FROM_WAREHOUSE_ACTIONS = ["SUBMITTED", "RESUBMITTED", "APPROVED", "REJECTED", "COST_UPDATED", "PAYMENT_UPDATED", "PI_UPDATED", "PARTY_UPDATED", "ON_HOLD", "INVOICE_CREATED"];
 
 export const isFinanceSide = (role) => role === "SALES" || role === "ACCOUNT";
 
@@ -79,6 +109,7 @@ export async function getFinanceWarehouseIds(user) {
 /**
  * Removes everything the warehouse manager must not see from an outward
  * entry: PI details, payment status, UTR, proof, approval info, workflow status.
+ * Ship to / Bill to details are kept - the warehouse needs them.
  * Items keep only category / model (sku) / quantity / uom.
  */
 export function sanitizeForWarehouse(entry) {
@@ -86,13 +117,11 @@ export function sanitizeForWarehouse(entry) {
   const {
     approvedById, approvedByName, approvedAt, approvalRemarks, status,
     piNumber, piDate, piAmount, piFileKey, piFileName, piFileType,
-    shipToContactPerson, shipToContactNo, shipToLocation,
-    billToContactPerson, billToContactNo, billToEmail,
     ...rest
   } = entry;
   return {
     ...rest,
-    dispatchState: status === STATUS.DISPATCHED ? "Dispatched" : "Pending",
+    dispatchState: isDispatchedStatus(status) ? "Dispatched" : "Pending",
     items: (entry.items || []).map((i) => ({
       id: i.id,
       category: i.category,
@@ -134,8 +163,13 @@ export function validatePi(data) {
   return null;
 }
 
-/** Returns an error message, or null when the Ship to / Bill to details are valid (all optional). */
+/** Returns an error message, or null when the Ship to / Bill to details are valid. */
 export function validateParty(data) {
+  if (!String(data.shipToContactPerson || "").trim()) return "Ship to contact person is required";
+  if (!String(data.shipToLocation || "").trim()) return "Ship to location is required";
+  if (!String(data.billToContactPerson || "").trim()) return "Bill to contact person is required";
+  if (!String(data.shipToContactNo || "").trim()) return "Ship to contact no. is required";
+  if (!String(data.billToContactNo || "").trim()) return "Bill to contact no. is required";
   const email = String(data.billToEmail || "").trim();
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Bill to email is not a valid email address";
   for (const [key, label] of [["shipToContactNo", "Ship to contact no."], ["billToContactNo", "Bill to contact no."]]) {
@@ -268,7 +302,7 @@ export function proofKeyProblem(items = [], minId, outwardNumber, piFileKey) {
  * Ownership is decided by the type / category name, so no extra database column is needed.
  * Each side only ever replaces its own rows, so Account and the warehouse never overwrite each other.
  */
-export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Other (Accounts)"]; // shown to the user as Invoice / E-way Bill / DC Challan / Other
+export const ACCOUNT_REF_TYPES = ["Invoice", "E-way Bill", "DC Challan", "Without Invoice", "Other (Accounts)"]; // shown to the user as Invoice / E-way Bill / DC Challan / Other
 export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Bilty", "Other"];
 
 export const canonicalAccountRefType = (type) =>
@@ -276,22 +310,25 @@ export const canonicalAccountRefType = (type) =>
 export const isAccountRefType = (type) => Boolean(canonicalAccountRefType(type));
 
 export const ACCOUNT_DOC_PREFIX = "Accounts other - ";
-export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|accounts other)/i.test(String(category || "").trim());
+export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
 
-// Account can add / replace / delete its own reference documents and files until the entry is dispatched.
-export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
+// Account can add / replace / delete its own reference documents and files only while the entry is approved and
+// waiting for dispatch, AND only after the warehouse manager has submitted the transportation form (see accountDocsBlock).
+export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_DISPATCH, STATUS.DOCS_PENDING, STATUS.READY_FOR_DISPATCH];
 
 /**
- * Above this PI amount (Rs.) the e-way bill document must be uploaded before approval.
+ * Above this PI amount (Rs.) the e-way bill document must be uploaded before the documents are shared with the
+ * warehouse manager (it used to be checked at approval, but Account can no longer upload before the vehicle details arrive).
  */
 export const EWAY_BILL_THRESHOLD = 100000;
 
 export function ewayBillProblem({ piAmount, documents = [] }) {
   if (!(Number(piAmount) > EWAY_BILL_THRESHOLD)) return null;
+  // The e-way bill FILE must be uploaded - a reference number alone is not enough.
   const hasDocument = documents.some((d) => /^e-?way/i.test(String(d.docCategory || "").trim()));
   return hasDocument
     ? null
-    : "The PI amount is above Rs. 1,00,000: upload the e-way bill document before approving.";
+    : "The PI amount is above Rs. 1,00,000: the e-way bill document must be uploaded by the account team before the entry can go to the warehouse.";
 }
 
 
@@ -328,3 +365,159 @@ export function validateReceiving(data, dispatchedAt) {
 export const RECEIVING_DOC_PREFIX = "Receiving";
 export const RECEIVING_REQUIRED_DOC = "Receiving copy";
 export const isReceivingDocCategory = (category) => /^receiving/i.test(String(category || "").trim());
+
+
+// ---------------------------------------------------------------------------
+// TRANSPORTATION  (warehouse manager) -> DOCUMENTS (account) -> DISPATCH (warehouse manager)
+// ---------------------------------------------------------------------------
+export const TRANSPORT_MODES = ["DEDICATED", "TRANSPORTATION"];
+export const TRANSPORT_MODE_LABEL = { DEDICATED: "Dedicated Vehicle", TRANSPORTATION: "Transportation" };
+// Dispatch mode picked on the transportation form (optional).
+export const DISPATCH_MODES = ["By Road", "Courier", "Customer Pickup"];
+
+export const STAGE = {
+  TRANSPORT_PENDING: "TRANSPORT_PENDING",
+  DOCS_PENDING: "DOCS_PENDING",
+  READY_FOR_DISPATCH: "READY_FOR_DISPATCH",
+  DISPATCHED: "DISPATCHED",
+};
+
+/** Returns an error message, or null when the transportation form is valid. */
+export function validateTransport(data) {
+  const mode = String(data.transportMode || "").trim().toUpperCase();
+  if (!TRANSPORT_MODES.includes(mode)) return "Select the vehicle type: Dedicated vehicle or Transportation";
+  const has = (k) => Boolean(String(data[k] || "").trim());
+  if (has("dispatchMode") && !DISPATCH_MODES.includes(String(data.dispatchMode).trim())) return "Select a valid dispatch mode: By Road, Courier or Customer Pickup";
+  if (mode === "DEDICATED") {
+    if (!has("vehicleNumber")) return "Vehicle number is required";
+    if (!has("driverName")) return "Driver name is required";
+    if (!has("driverContact")) return "Driver contact is required";
+    if (!PHONE_RE.test(String(data.driverContact).trim())) return "Driver contact is not valid";
+  } else {
+    if (!has("transporterId")) return "Transporter ID is required";
+    if (!has("transporterName")) return "Transporter name is required";
+    if (!has("transporterContact")) return "Transporter contact is required";
+    if (!PHONE_RE.test(String(data.transporterContact).trim())) return "Transporter contact is not valid";
+  }
+  return null;
+}
+
+/** Transportation columns as stored in Min. The fields of the other vehicle type are cleared. */
+export function toTransportColumns(data) {
+  const mode = String(data.transportMode).trim().toUpperCase();
+  const t = (v) => String(v ?? "").trim() || null;
+  const dedicated = mode === "DEDICATED";
+  return {
+    transportMode: mode,
+    dispatchMode: DISPATCH_MODES.includes(String(data.dispatchMode || "").trim()) ? String(data.dispatchMode).trim() : null,
+    vehicleNumber: dedicated ? t(data.vehicleNumber) : null,
+    driverName: dedicated ? t(data.driverName) : null,
+    driverContact: dedicated ? t(data.driverContact) : null,
+    transporterId: dedicated ? null : t(data.transporterId),
+    transporterName: dedicated ? null : t(data.transporterName),
+    transporterContact: dedicated ? null : t(data.transporterContact),
+  };
+}
+
+// Account documents that open the dispatch form for the warehouse manager.
+// Every Account document except the Invoice (E-way bill, DC Challan, Without Invoice, Other) releases the entry to the warehouse manager. The Invoice stays internal to Account.
+export const isReleaseDocCategory = (category) => /^(e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
+export const isInvoiceDocCategory = (category) => /^invoice/i.test(String(category || "").trim());
+export const isInvoiceRefType = (type) => String(type || "").trim().toLowerCase() === "invoice";
+// Account reference types that release the entry: every account reference except the Invoice.
+export const isReleaseRefType = (type) => isAccountRefType(type) && !isInvoiceRefType(type);
+// An entry is released to the warehouse manager when Account has added ANY non-Invoice document (file) OR
+// ANY non-Invoice reference (E-way Bill / DC Challan / Without Invoice / Other). An Invoice alone stays internal.
+export const hasReleaseDocument = (docs = [], refs = []) =>
+  docs.some((d) => isReleaseDocCategory(d.docCategory)) || refs.some((r) => isReleaseRefType(r.refDocType));
+
+/**
+ * The status an approved, not-yet-dispatched entry should have, from what has been submitted so far:
+ * no transportation form -> TRANSPORT_PENDING; form in, no release document -> DOCS_PENDING; both -> READY_FOR_DISPATCH.
+ */
+export function deriveApprovedStatus(entry, docs = [], refs = []) {
+  if (!entry.transportSubmittedAt) return STATUS.TRANSPORT_PENDING;
+  // Above the e-way limit the entry stays with Account until the e-way bill file is uploaded.
+  if (ewayBillProblem({ piAmount: entry.piAmount, documents: docs })) return STATUS.DOCS_PENDING;
+  return hasReleaseDocument(docs, refs) ? STATUS.READY_FOR_DISPATCH : STATUS.DOCS_PENDING;
+}
+
+/** Which stage an entry is in. null for entries that are not approved yet (use `status`). */
+export function outwardStage(entry, docs = [], refs = []) {
+  if (isDispatchedStatus(entry.status)) return STAGE.DISPATCHED;
+  if (!isApprovedStatus(entry.status)) return null;
+  // The saved status is the truth; legacy rows (PENDING_DISPATCH) are worked out from what exists.
+  if (entry.status === STATUS.PENDING_DISPATCH) return deriveApprovedStatus(entry, docs, refs);
+  return entry.status;
+}
+
+/**
+ * Keeps the SAVED status of an approved entry in step with the transportation form and Account's documents.
+ * Call it after anything that adds / removes either. `client` is prisma or a transaction client.
+ * Returns the status the entry has afterwards (null when it is not in an approved, undispatched status).
+ */
+export async function syncApprovedStage(client, minId) {
+  const min = await client.min.findUnique({ where: { id: minId }, select: { status: true, transportSubmittedAt: true, piAmount: true } });
+  if (!min || !isApprovedStatus(min.status)) return null;
+  const docs = await client.document.findMany({ where: { linkedType: "outward", linkedId: minId }, select: { docCategory: true } });
+  const refs = await client.minReferenceDocument.findMany({ where: { minId }, select: { refDocType: true } });
+  const target = deriveApprovedStatus(min, docs, refs);
+  if (target !== min.status) {
+    await client.min.updateMany({ where: { id: minId, status: { in: APPROVED_STATUSES } }, data: { status: target } });
+  }
+  return target;
+}
+
+/**
+ * Why Sales / Account can no longer update (edit, reject, hold) this entry. null = still open.
+ * Locked once the transportation details are sent AND Account has uploaded its documents, and always after dispatch.
+ * `docs` = the entry's documents, `refs` = its reference documents (either one counts as "Account uploaded").
+ * The Super admin ignores this lock.
+ */
+export function editLockReason(entry, docs = [], refs = []) {
+  if (isDispatchedStatus(entry.status)) return "This entry has been dispatched and can no longer be edited";
+  const message = "The transportation details and the account documents are already submitted, so this entry can no longer be updated";
+  if (entry.status === STATUS.READY_FOR_DISPATCH) return message;
+  if (isApprovedStatus(entry.status) && entry.transportSubmittedAt) {
+    const accountUploaded = docs.some((d) => isAccountDocCategory(d.docCategory)) || refs.some((r) => isAccountRefType(r.refDocType));
+    if (accountUploaded) return message;
+  }
+  return null;
+}
+
+/**
+ * Why the transportation details can no longer be changed (null = still editable).
+ * Locked as soon as the details were submitted AND Account has uploaded anything (a document or a reference).
+ * Applies to EVERY role (warehouse manager, Super admin) and every screen: transportation form, dispatch form,
+ * the admin update form.
+ */
+export const TRANSPORT_LOCK_MESSAGE = "The transportation details can no longer be changed because the account team has already uploaded its documents";
+export function transportLockReason(entry, docs = [], refs = []) {
+  if (!entry?.transportSubmittedAt) return null;
+  const accountUploaded = docs.some((d) => isAccountDocCategory(d.docCategory)) || refs.some((r) => isAccountRefType(r.refDocType));
+  return accountUploaded ? TRANSPORT_LOCK_MESSAGE : null;
+}
+
+// Every document is shared with the warehouse manager the moment it exists - except the Invoice, which Account
+// creates and keeps to itself (the manager never gets the document, the reference or the download).
+export const isReleasedStage = (stage) => stage === STAGE.READY_FOR_DISPATCH || stage === STAGE.DISPATCHED;
+
+export function documentsForWarehouse(docs = []) {
+  return docs.filter((d) => !isInvoiceDocCategory(d.docCategory));
+}
+
+export function referencesForWarehouse(refs = []) {
+  return refs.filter((r) => !isInvoiceRefType(r.refDocType));
+}
+
+/** True when Account has created an invoice (document or reference). Never sent to the warehouse manager. */
+export const hasInvoice = (docs = [], refs = []) =>
+  docs.some((d) => isInvoiceDocCategory(d.docCategory)) || refs.some((r) => isInvoiceRefType(r.refDocType));
+
+/** Why Account cannot add documents right now (null = it can). */
+export function accountDocsBlock(entry) {
+  if (isDispatchedStatus(entry.status)) return "Documents can no longer be changed after dispatch";
+  if (!isApprovedStatus(entry.status)) return "Documents can be added only after the entry is approved";
+  if (!entry.transportSubmittedAt) return "Documents can be added only after the warehouse has submitted the vehicle / transportation details";
+  return null;
+}

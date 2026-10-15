@@ -13,16 +13,19 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { isReceivingDocCategory, isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
+import { STAGE, DISPATCH_MODES, transportModeLabel, isTransportSubmitted, isReceivingDocCategory, isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
 import useSerialScanner from "../components/SerialScanner";
 import { buildSerialLines, initialSerialValues, serialPayload, serialProblem } from "../features/outward/serialHelpers";
 
+import LocationLink from "../components/LocationLink";
 /**
  * =========================================================
  * DISPATCH DETAILS  (Warehouse manager, Super admin)
  * =========================================================
- * Opens right after the entry is approved. Filled once; after dispatch the Super admin
+ * Opens only after the transportation form is submitted AND the account team has shared a DC Challan / Without
+ * Invoice document (stage READY_FOR_DISPATCH). Vehicle / driver / transporter details come from the transportation
+ * form and are shown read-only here. Filled once; after dispatch the Super admin
  * changes everything (dispatch details included) with Update. The manager only
  * sees the item details (category, model, quantity, UOM) and fills the
  * dispatch side: reference documents, dispatch mode, vehicle / AWB number
@@ -107,7 +110,7 @@ export default function OutwardDispatch() {
     setDriverName(outward.driverName || "");
     setDriverContact(outward.driverContact || "");
     setRemarks(outward.remarks || "");
-    if (outward.dispatchState === "Dispatched" || outward.workflowStatus === "DISPATCHED") {
+    if (outward.dispatchState === "Dispatched" || ["DISPATCHED", "DELIVERED"].includes(outward.workflowStatus)) {
       setDispatchDateTime(toLocalInput(outward.refDocDate));
     }
   }, [outward, filled]);
@@ -126,7 +129,7 @@ export default function OutwardDispatch() {
     return slots;
   }, [references]);
 
-  const alreadyDispatched = outward?.dispatchState === "Dispatched" || outward?.workflowStatus === "DISPATCHED";
+  const alreadyDispatched = outward?.dispatchState === "Dispatched" || ["DISPATCHED", "DELIVERED"].includes(outward?.workflowStatus);
   const superAdmin = isSuperAdminUser();
 
   const serialLines = useMemo(() => buildSerialLines(outward?.items || []), [outward?.items]);
@@ -156,6 +159,21 @@ export default function OutwardDispatch() {
     }
   }, [outward, id, superAdmin, navigate, detailStatus]);
 
+  // The dispatch form is locked until the transportation form is in and Account has shared the documents.
+  useEffect(() => {
+    if (
+      detailStatus === "succeeded" && outward && outward.id === id &&
+      outward.stage && ![STAGE.READY_FOR_DISPATCH, STAGE.DISPATCHED].includes(outward.stage)
+    ) {
+      toast.info(
+        outward.stage === STAGE.TRANSPORT_PENDING
+          ? "Fill the transportation form first."
+          : "Dispatch opens once the account team has shared the documents."
+      );
+      navigate(`/outward/${id}`, { replace: true });
+    }
+  }, [outward, id, detailStatus, navigate]);
+
   const submitReject = async () => {
     if (!rejectReason.trim()) return toast.error("Please give a reason for rejecting.");
     setRejecting(true);
@@ -176,8 +194,11 @@ export default function OutwardDispatch() {
         refDocNumber: r.refDocNumber.trim(),
       }));
     if (!refs.length) return toast.error("Please enter at least one reference document number.");
-    if (!dispatchMode) return toast.error("Please select the dispatch mode.");
-    if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
+    const fromTransport = isTransportSubmitted(outward);
+    if (!fromTransport) {
+      if (!dispatchMode) return toast.error("Please select the dispatch mode.");
+      if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
+    }
 
     // Every Pcs unit needs its own serial number. Entries dispatched before serial numbers existed
     // can still be updated without them (but if some are entered, all must be).
@@ -197,10 +218,13 @@ export default function OutwardDispatch() {
         files: stagedDocs.map((d) => ({ file: d.file, docCategory: d.docCategory })),
         payload: {
           outwardDateTime: dispatchDateTime,
-          dispatchMode,
-          vehicleNumber: vehicleNumber.trim() || undefined,
-          driverName: driverName.trim() || undefined,
-          driverContact: driverContact.trim() || undefined,
+          // With a transportation form the server uses the saved vehicle / driver / transporter details.
+          ...(fromTransport ? {} : {
+            dispatchMode,
+            vehicleNumber: vehicleNumber.trim() || undefined,
+            driverName: driverName.trim() || undefined,
+            driverContact: driverContact.trim() || undefined,
+          }),
           remarks: remarks.trim() || undefined,
           referenceDocuments: refs,
           ...(legacyDispatched ? {} : { serials }),
@@ -249,6 +273,7 @@ export default function OutwardDispatch() {
     );
   }
 
+  const fromTransportForm = isTransportSubmitted(outward);
   const items = outward.items || [];
   const accountRefs = (Array.isArray(outward.referenceDocuments) ? outward.referenceDocuments : []).filter(isAccountRef);
   // Super admin also sees the sales side (PI details, payment status, UTR, proof, approval) and can update it.
@@ -291,13 +316,13 @@ export default function OutwardDispatch() {
               <InfoField label="Outward type" value={outward.outwardType} />
               {showCost && <InfoField label="PI No." value={outward.piNumber} />}
               {showCost && <InfoField label="PI date" value={outward.piDate ? new Date(outward.piDate).toLocaleDateString("en-IN") : "-"} />}
-              {showCost && <InfoField label="PI amount" value={outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")} />}
-              {showCost && <InfoField label="Ship to - Contact person" value={outward.shipToContactPerson} />}
-              {showCost && <InfoField label="Ship to - Contact no." value={outward.shipToContactNo} />}
-              {showCost && <InfoField label="Ship to - Location" value={outward.shipToLocation} />}
-              {showCost && <InfoField label="Bill to - Contact person" value={outward.billToContactPerson} />}
-              {showCost && <InfoField label="Bill to - Contact no." value={outward.billToContactNo} />}
-              {showCost && <InfoField label="Bill to - Email" value={outward.billToEmail} />}
+              {showCost && <InfoField label="PI amount (inclusive GST)" value={outward.piAmount === null || outward.piAmount === undefined ? "-" : Number(outward.piAmount).toLocaleString("en-IN")} />}
+              <InfoField label="Ship to - Contact person" value={outward.shipToContactPerson} />
+              <InfoField label="Ship to - Contact no." value={outward.shipToContactNo} />
+              <InfoField label="Ship to - Location" value={<LocationLink value={outward.shipToLocation} fallback={null} />} />
+              <InfoField label="Bill to - Contact person" value={outward.billToContactPerson} />
+              <InfoField label="Bill to - Contact no." value={outward.billToContactNo} />
+              <InfoField label="Bill to - Email" value={outward.billToEmail} />
               <InfoField label="Warehouse" value={outward.warehouse?.name} />
               <InfoField label="Created by" value={outward.createdBy?.name || outward.createdBy?.email} />
               {showCost && <InfoField label="Approved by" value={outward.approvedByName} />}
@@ -310,18 +335,46 @@ export default function OutwardDispatch() {
             <h2 className="mb-4 text-sm font-semibold text-gray-900">Dispatch details</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div><label className={labelCls}>Dispatch date and time</label><input type="datetime-local" value={dispatchDateTime} onChange={(e) => setDispatchDateTime(e.target.value)} className={inputCls} /></div>
-              <div>
-                <label className={labelCls}>Dispatch mode</label>
-                <div className="relative">
-                  <select value={dispatchMode} onChange={(e) => setDispatchMode(e.target.value)} className={`${inputCls} appearance-none`}>
-                    <option>By Road</option><option>Courier</option><option>Customer Pickup</option>
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                </div>
-              </div>
-              <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
-              <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
-              <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
+              {fromTransportForm ? (
+                <>
+                  <InfoField label="Dispatch mode" value={DISPATCH_MODES.includes(outward.dispatchMode) ? outward.dispatchMode : ""} />
+                  <InfoField label="Vehicle type" value={transportModeLabel(outward.transportMode)} />
+                  {outward.transportMode === "TRANSPORTATION" ? (
+                    <>
+                      <InfoField label="Transporter ID" value={outward.transporterId} />
+                      <InfoField label="Transporter name" value={outward.transporterName} />
+                      <InfoField label="Transporter contact" value={outward.transporterContact} />
+                    </>
+                  ) : (
+                    <>
+                      <InfoField label="Vehicle no." value={outward.vehicleNumber} />
+                      <InfoField label="Driver name" value={outward.driverName} />
+                      <InfoField label="Driver contact" value={outward.driverContact} />
+                    </>
+                  )}
+                  {/* Locked once Account has uploaded its documents (always the case when this form is open). */}
+                  {!outward.transportLocked && (
+                    <div className="flex items-end">
+                      <button type="button" onClick={() => navigate(`/outward/${id}/transportation`)} className="text-xs font-semibold text-blue-700 hover:underline">Edit transportation details</button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className={labelCls}>Dispatch mode</label>
+                    <div className="relative">
+                      <select value={dispatchMode} onChange={(e) => setDispatchMode(e.target.value)} className={`${inputCls} appearance-none`}>
+                        <option>By Road</option><option>Courier</option><option>Customer Pickup</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                    </div>
+                  </div>
+                  <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
+                </>
+              )}
             </div>
 
             <div className="mt-5 flex items-center justify-between">
@@ -355,7 +408,7 @@ export default function OutwardDispatch() {
 
             {accountRefs.length > 0 && (
               <div className="mt-5 border-t pt-4">
-                <span className="text-xs font-semibold text-gray-700">Added by the account team</span>
+                <span className="text-xs font-semibold text-gray-700">Shared by the account team</span>
                 <div className="mt-2 overflow-x-auto rounded-lg border">
                   <table className="w-full text-[11px] sm:text-sm">
                     <thead>

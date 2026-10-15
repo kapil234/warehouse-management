@@ -38,6 +38,25 @@ import {
   validateReceiving,
   isReceivingDocCategory,
   RECEIVING_REQUIRED_DOC,
+  TRANSPORT_MODE_LABEL,
+  validateTransport,
+  toTransportColumns,
+  outwardStage,
+  hasReleaseDocument,
+  documentsForWarehouse,
+  referencesForWarehouse,
+  accountDocsBlock,
+  APPROVED_STATUSES,
+  DISPATCHED_STATUSES,
+  isApprovedStatus,
+  isDispatchedStatus,
+  deriveApprovedStatus,
+  editLockReason,
+  syncApprovedStage,
+  hasInvoice,
+  isInvoiceDocCategory,
+  transportLockReason,
+  TRANSPORT_LOCK_MESSAGE,
 } from "../utils/outwardWorkflow.js";
 
 const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "Dispatch photo"];
@@ -162,21 +181,35 @@ function documentStatus(documents = []) {
 
 // `status` in the response has always meant the documents checklist
 // ("Complete" / "Pending"), and the frontend relies on that. The workflow
-// status is therefore sent as `workflowStatus` (never sent to warehouse managers).
+// status is therefore sent as `workflowStatus` (to every role, so each sees the real step).
 function finishFor(req, entry, allDocs) {
   const shaped = shapeFor(req, entry);
-  const workflowStatus = req.user.role === "WAREHOUSE_MANAGER" ? undefined : entry.status;
+  const stage = outwardStage(entry, allDocs, entry.referenceDocuments || []);
+  const workflowStatus = entry.status;
   // Dispatch documents reach Sales / Account only after the warehouse manager
   // has filled the dispatch details (status DISPATCHED). The super admin does
   // not see the documents section while the entry is still at the approval
   // stage (PENDING_APPROVAL / REJECTED) - only from dispatch details onwards.
   let docsVisible = true;
-  if (isFinanceSide(req.user.role)) docsVisible = entry.status === STATUS.DISPATCHED;
-  else if (req.user.role === "SUPER_ADMIN") docsVisible = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED].includes(entry.status);
+  if (isFinanceSide(req.user.role)) docsVisible = isDispatchedStatus(entry.status);
+  else if (req.user.role === "SUPER_ADMIN") docsVisible = isApprovedStatus(entry.status) || isDispatchedStatus(entry.status);
   let docs = docsVisible ? allDocs : [];
+  // Warehouse manager: Account's documents appear only once released (every document except the Invoice), and the
+  // Invoice (document and reference) is never shared with them.
+  if (req.user.role === "WAREHOUSE_MANAGER") {
+    docs = documentsForWarehouse(allDocs);
+    if (Array.isArray(shaped.referenceDocuments)) shaped.referenceDocuments = referencesForWarehouse(shaped.referenceDocuments);
+  }
   // Account always sees (and, until dispatch, manages) its own invoice / e-way bill / other documents.
   if (req.user.role === "ACCOUNT" && !docsVisible) docs = allDocs.filter((d) => isAccountDocCategory(d.docCategory));
-  return { ...shaped, workflowStatus, ...documentStatus(docs), documents: docs };
+  // Sales / Account / admin are told when the entry is locked (transportation sent + account documents uploaded),
+  // so the screens can hide Edit / Reject / Hold. The server enforces it anyway.
+  const lockReason = req.user.role === "WAREHOUSE_MANAGER" ? null : editLockReason(entry, allDocs, entry.referenceDocuments || []);
+  // Transportation details are frozen once Account has uploaded its documents - for every role (the manager too).
+  const transportLocked = Boolean(transportLockReason(entry, allDocs, entry.referenceDocuments || []));
+  // Status update for Account / Sales / admin: Account has created the invoice (the manager is never told).
+  const invoiceCreated = req.user.role === "WAREHOUSE_MANAGER" ? undefined : hasInvoice(allDocs, entry.referenceDocuments || []);
+  return { ...shaped, workflowStatus, stage, invoiceCreated, editLocked: Boolean(lockReason), editLockReason: lockReason, transportLocked, ...documentStatus(docs), documents: docs };
 }
 
 const plainItem = (i) => ({ category: i.category, sku: i.sku, companyName: i.companyName, quantity: i.quantity, uom: i.uom });
@@ -419,11 +452,14 @@ async function moveTempProofs(minId, outwardNumber) {
     prisma.min.findUnique({ where: { id: minId }, select: { piFileKey: true } }),
   ]);
   const folder = outwardFolder(outwardNumber);
-  const jobs = rows.map(async (row) => {
-    const target = `${folder}${row.proofFileKey.split("/").pop()}`;
-    const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(row.proofFileKey, target);
-    if (error) return console.error("Proof move failed:", row.proofFileKey, error.message);
-    await prisma.minItem.update({ where: { id: row.id }, data: { proofFileKey: target } });
+  // One payment proof can be shared by several item rows: move the file once, then re-point every row using it.
+  const rowsByKey = new Map();
+  for (const row of rows) rowsByKey.set(row.proofFileKey, [...(rowsByKey.get(row.proofFileKey) || []), row.id]);
+  const jobs = [...rowsByKey.entries()].map(async ([key, ids]) => {
+    const target = `${folder}${key.split("/").pop()}`;
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET).move(key, target);
+    if (error) return console.error("Proof move failed:", key, error.message);
+    await prisma.minItem.updateMany({ where: { id: { in: ids } }, data: { proofFileKey: target } });
   });
   if (entry?.piFileKey?.startsWith("uploads/")) {
     jobs.push((async () => {
@@ -532,11 +568,25 @@ export async function createOutward(req, res) {
   }
 }
 
+// Edit lock for Sales / Account: reads the entry's documents + reference documents and applies editLockReason.
+// `entry` needs id, status and transportSubmittedAt. `client` is prisma or a transaction client.
+async function lockReasonFor(client, entry) {
+  if (isDispatchedStatus(entry.status) || entry.status === STATUS.READY_FOR_DISPATCH) return editLockReason(entry);
+  if (!isApprovedStatus(entry.status) || !entry.transportSubmittedAt) return null;
+  const [docs, refs] = await Promise.all([
+    client.document.findMany({ where: { linkedType: "outward", linkedId: entry.id }, select: { docCategory: true } }),
+    client.minReferenceDocument.findMany({ where: { minId: entry.id }, select: { refDocType: true } }),
+  ]);
+  return editLockReason(entry, docs, refs);
+}
+
 // ---------------------------------------------------------------------------
 // UPDATE  (Sales until dispatch, Super admin any time)
 // PENDING_APPROVAL / REJECTED  -> always (re)submitted to Account.
-// PENDING_DISPATCH             -> any update goes back to Account for approval.
-// DISPATCHED                   -> Super admin only, status unchanged.
+// TRANSPORT_PENDING / DOCS_PENDING -> any update goes back to Account for approval, until the transportation
+//                                 details are sent AND Account has uploaded documents (then it is locked).
+// READY_FOR_DISPATCH           -> locked for Sales (Super admin only).
+// DISPATCHED / DELIVERED       -> Super admin only, status unchanged.
 // ---------------------------------------------------------------------------
 export async function updateOutward(req, res) {
   try {
@@ -554,6 +604,7 @@ export async function updateOutward(req, res) {
         billToContactPerson: true, billToContactNo: true, billToEmail: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
         dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, remarks: true,
+        transportSubmittedAt: true,
         items: true,
       },
     });
@@ -569,8 +620,9 @@ export async function updateOutward(req, res) {
           return res.status(403).json({ message: "You can only edit outward entries you created or that the admin created" });
         }
       }
-      if (!SALES_EDITABLE_STATUSES.includes(existing.status)) {
-        return res.status(409).json({ message: "This entry has been dispatched and can no longer be edited" });
+      const lockReason = await lockReasonFor(prisma, existing);
+      if (lockReason || !SALES_EDITABLE_STATUSES.includes(existing.status)) {
+        return res.status(409).json({ message: lockReason || "This entry can no longer be edited" });
       }
     }
 
@@ -600,11 +652,15 @@ export async function updateOutward(req, res) {
 
     // Update after dispatch (Super admin): the same save also carries the dispatch details.
     let dispatchUpdate = null;
-    if (isAdmin && existing.status === STATUS.DISPATCHED && data.dispatch) {
+    if (isAdmin && isDispatchedStatus(existing.status) && data.dispatch) {
       const d = data.dispatch;
-      if (!d.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
-      const adminDriverProblem = validateDriver(d);
-      if (adminDriverProblem) return res.status(422).json({ message: adminDriverProblem });
+      // With a submitted transportation form (always locked by now) the vehicle / driver / transporter fields are not editable here.
+      const transportFixed = Boolean(existing.transportSubmittedAt);
+      if (!transportFixed) {
+        if (!d.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
+        const adminDriverProblem = validateDriver(d);
+        if (adminDriverProblem) return res.status(422).json({ message: adminDriverProblem });
+      }
       const refs = (Array.isArray(d.referenceDocuments) ? d.referenceDocuments : [])
         .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
         .map((r) => ({
@@ -616,14 +672,19 @@ export async function updateOutward(req, res) {
       if (!refs.length) return res.status(422).json({ message: "At least one reference document is required" });
       dispatchUpdate = {
         refs,
+        transportFixed,
         snapshot: {
           refDocType: refs[0].refDocType,
           refDocNumber: refs[0].refDocNumber,
           ewayBillNumber: refs[0].ewayBillNumber,
-          dispatchMode: d.dispatchMode,
-          vehicleNumber: d.vehicleNumber?.trim() || null,
-          driverName: d.driverName?.trim() || null,
-          driverContact: d.driverContact?.trim() || null,
+          ...(transportFixed
+            ? {}
+            : {
+                dispatchMode: d.dispatchMode,
+                vehicleNumber: d.vehicleNumber?.trim() || null,
+                driverName: d.driverName?.trim() || null,
+                driverContact: d.driverContact?.trim() || null,
+              }),
           remarks: d.remarks?.trim() || null,
         },
       };
@@ -659,16 +720,19 @@ export async function updateOutward(req, res) {
 
     await prisma.$transaction(async (tx) => {
       // Re-read the status inside the transaction: Account / warehouse may have acted meanwhile.
-      const current = await tx.min.findUnique({ where: { id }, select: { status: true } });
+      const current = await tx.min.findUnique({ where: { id }, select: { id: true, status: true, transportSubmittedAt: true } });
       if (!current) throw httpError(404, "Outward entry not found");
-      if (!isAdmin && !SALES_EDITABLE_STATUSES.includes(current.status)) {
-        throw httpError(409, "This entry has been dispatched and can no longer be edited");
+      if (!isAdmin) {
+        const lockNow = await lockReasonFor(tx, current);
+        if (lockNow || !SALES_EDITABLE_STATUSES.includes(current.status)) {
+          throw httpError(409, lockNow || "This entry can no longer be edited");
+        }
       }
       const wasRejected = current.status === STATUS.REJECTED;
-      const wasApproved = current.status === STATUS.PENDING_DISPATCH;
+      const wasApproved = isApprovedStatus(current.status);
       const wasOnHold = current.status === STATUS.ON_HOLD;
       // ANY update (Sales or super admin) on an approved, not-yet-dispatched entry sends it back for
-      // approval again. A dispatched entry edited by the super admin keeps its status.
+      // approval again. A dispatched / delivered entry edited by the super admin keeps its status.
       const resubmit = current.status === STATUS.PENDING_APPROVAL || wasRejected || wasApproved || wasOnHold;
       sentForApproval = resubmit;
 
@@ -702,7 +766,9 @@ export async function updateOutward(req, res) {
       };
       const entries = [];
       if (dispatchUpdate) {
-        const dispatchChanges = diffFields(existing, dispatchUpdate.snapshot, ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "remarks"]);
+        const dispatchChanges = diffFields(existing, dispatchUpdate.snapshot, dispatchUpdate.transportFixed
+          ? ["refDocType", "refDocNumber", "ewayBillNumber", "remarks"]
+          : ["refDocType", "refDocNumber", "ewayBillNumber", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "remarks"]);
         for (const c of dispatchChanges) {
           entries.push({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c });
         }
@@ -767,14 +833,19 @@ export async function updateOutward(req, res) {
 // ---------------------------------------------------------------------------
 // APPROVE (only while PENDING_APPROVAL) / REJECT (until dispatch)  (Account, Super admin)
 // ---------------------------------------------------------------------------
-async function loadForDecision(req, allowedStatuses, notAllowedMessage) {
+async function loadForDecision(req, allowedStatuses, notAllowedMessage, { enforceLock = false } = {}) {
   const min = await prisma.min.findUnique({
     where: { id: req.params.id },
-    select: { id: true, outwardNumber: true, warehouseId: true, status: true, createdById: true, piAmount: true },
+    select: { id: true, outwardNumber: true, warehouseId: true, status: true, createdById: true, piAmount: true, transportSubmittedAt: true },
   });
   if (!min) throw httpError(404, "Outward entry not found");
   await assertEntryVisible(req, min);
   if (!allowedStatuses.includes(min.status)) throw httpError(409, notAllowedMessage);
+  // Account can reject / hold until the dispatch is done; only Sales edits are locked (enforceLock is opt-in).
+  if (enforceLock && req.user.role !== "SUPER_ADMIN") {
+    const lockReason = await lockReasonFor(prisma, min);
+    if (lockReason) throw httpError(409, lockReason);
+  }
   return min;
 }
 
@@ -783,18 +854,21 @@ export async function approveOutward(req, res) {
     const min = await loadForDecision(req, APPROVABLE_STATUSES, "This entry is not waiting for approval");
     const remarks = req.body?.remarks?.trim() || null;
 
-    // Above Rs. 1,00,000 an e-way bill document must be on the entry before it is approved.
-    if (Number(min.piAmount) > EWAY_BILL_THRESHOLD) {
-      const documents = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, select: { docCategory: true } });
-      const problem = ewayBillProblem({ piAmount: min.piAmount, documents });
-      if (problem) return res.status(422).json({ message: problem });
-    }
+    // Normally TRANSPORT_PENDING. An entry that was edited after its transportation form / documents were
+    // submitted keeps that progress (DOCS_PENDING / READY_FOR_DISPATCH).
+    const [docsNow, refsNow] = min.transportSubmittedAt
+      ? await Promise.all([
+          prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, select: { docCategory: true } }),
+          prisma.minReferenceDocument.findMany({ where: { minId: min.id }, select: { refDocType: true } }),
+        ])
+      : [[], []];
+    const nextStatus = deriveApprovedStatus(min, docsNow, refsNow);
 
     // Guard against a double click / two approvers: only flips if it is still pending.
     const { count } = await prisma.min.updateMany({
       where: { id: min.id, status: { in: APPROVABLE_STATUSES } },
       data: {
-        status: STATUS.PENDING_DISPATCH,
+        status: nextStatus,
         approvedById: req.user.id,
         approvedByName: req.user.name,
         approvedAt: new Date(),
@@ -808,7 +882,10 @@ export async function approveOutward(req, res) {
       action: "APPROVED", description: `Approved by ${req.user.name}${remarks ? ` — ${remarks}` : ""}`,
       userId: req.user.id, warehouseId: min.warehouseId,
     });
-    return res.json({ message: "Approved. Sent to the warehouse manager for dispatch." });
+    return res.json({
+      message: nextStatus === STATUS.TRANSPORT_PENDING ? "Approved. The warehouse manager can now fill the transportation form." : "Approved.",
+      data: { workflowStatus: nextStatus },
+    });
   } catch (error) {
     console.error("Approve outward error:", error);
     return res.status(error.status || 500).json({ message: error.message || "Failed to approve" });
@@ -906,6 +983,7 @@ export async function dispatchOutward(req, res) {
         id: true, warehouseId: true, outwardNumber: true, status: true,
         refDocType: true, refDocNumber: true, ewayBillNumber: true,
         dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, remarks: true,
+        transportMode: true, transportSubmittedAt: true, piAmount: true,
         items: { select: { category: true, sku: true, quantity: true, uom: true } },
         _count: { select: { serials: true } },
       },
@@ -915,15 +993,31 @@ export async function dispatchOutward(req, res) {
     const warehouse = await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
     // The warehouse manager (and super admin) fill the dispatch details and can keep updating them
     // after dispatch: reference documents, dispatch mode, vehicle number, remarks (documents via upload).
-    const allowedStatuses = [STATUS.PENDING_DISPATCH, STATUS.DISPATCHED];
+    const allowedStatuses = [...APPROVED_STATUSES, ...DISPATCHED_STATUSES];
     if (!allowedStatuses.includes(existing.status)) {
       // Same message whatever the reason, so nothing about approval leaks to the warehouse.
       return res.status(409).json({ message: "This entry is not ready for dispatch" });
     }
 
-    if (!data.dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
-    const driverProblem = validateDriver(data);
-    if (driverProblem) return res.status(422).json({ message: driverProblem });
+    // Transportation form first, then Account's documents: only then does the dispatch form open.
+    const hasTransport = Boolean(existing.transportSubmittedAt);
+    const firstDispatch = isApprovedStatus(existing.status);
+    if (firstDispatch) {
+      if (!hasTransport) return res.status(409).json({ message: "Please submit the transportation form first" });
+      const [docsNow, refsNow] = await Promise.all([
+        prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { docCategory: true } }),
+        prisma.minReferenceDocument.findMany({ where: { minId: id }, select: { refDocType: true } }),
+      ]);
+      if (!hasReleaseDocument(docsNow, refsNow) || ewayBillProblem({ piAmount: existing.piAmount, documents: docsNow })) return res.status(409).json({ message: "Dispatch opens once the account team has shared the documents" });
+    }
+    // Vehicle / driver / transporter come from the transportation form (read-only here). Entries dispatched
+    // before that form existed keep the old behaviour and take them from this request.
+    const dispatchMode = hasTransport ? existing.dispatchMode || TRANSPORT_MODE_LABEL[existing.transportMode] : data.dispatchMode;
+    if (!dispatchMode) return res.status(422).json({ message: "Dispatch mode is required" });
+    if (!hasTransport) {
+      const driverProblem = validateDriver(data);
+      if (driverProblem) return res.status(422).json({ message: driverProblem });
+    }
     // Invoice / E-way bill references belong to the account team; the dispatch side only has
     // delivery challan, return note and other. Account's rows are never touched here.
     const normalizedRefs = references
@@ -944,7 +1038,7 @@ export async function dispatchOutward(req, res) {
     // Serial numbers: one for every Pcs unit. Entries dispatched before this feature (no serials saved yet)
     // may be updated without them, but if serials are sent they must be complete.
     const serials = cleanSerials(data.serials);
-    const legacyDispatched = existing.status === STATUS.DISPATCHED && existing._count.serials === 0 && serials.length === 0;
+    const legacyDispatched = isDispatchedStatus(existing.status) && existing._count.serials === 0 && serials.length === 0;
     if (!legacyDispatched) {
       const serialProblem = validateSerials(existing.items, serials);
       if (serialProblem) return res.status(422).json({ message: serialProblem });
@@ -955,13 +1049,13 @@ export async function dispatchOutward(req, res) {
     const newSnapshot = {
       refDocType: normalizedRefs[0].refDocType,
       refDocNumber: normalizedRefs[0].refDocNumber,
-      dispatchMode: data.dispatchMode,
-      vehicleNumber: data.vehicleNumber?.trim() || null,
-      driverName: data.driverName?.trim() || null,
-      driverContact: data.driverContact?.trim() || null,
+      dispatchMode,
+      vehicleNumber: hasTransport ? existing.vehicleNumber : data.vehicleNumber?.trim() || null,
+      driverName: hasTransport ? existing.driverName : data.driverName?.trim() || null,
+      driverContact: hasTransport ? existing.driverContact : data.driverContact?.trim() || null,
       remarks: data.remarks?.trim() || null,
     };
-    const changes = existing.status === STATUS.DISPATCHED
+    const changes = !firstDispatch
       ? diffFields(existing, newSnapshot, ["refDocType", "refDocNumber", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "remarks"])
       : [];
 
@@ -979,9 +1073,10 @@ export async function dispatchOutward(req, res) {
           data: {
             ...newSnapshot,
             ...(data.outwardDateTime ? { refDocDate: new Date(data.outwardDateTime) } : {}),
-            status: STATUS.DISPATCHED,
+            // A delivered entry stays DELIVERED when the dispatch details are corrected.
+            status: existing.status === STATUS.DELIVERED ? STATUS.DELIVERED : STATUS.DISPATCHED,
             // Who / when dispatched is set once, on the first save only.
-            ...(existing.status === STATUS.PENDING_DISPATCH
+            ...(firstDispatch
               ? { dispatchedById: req.user.id, dispatchedByName: req.user.name, dispatchedAt: new Date() }
               : {}),
           },
@@ -1019,8 +1114,8 @@ export async function dispatchOutward(req, res) {
     }
 
     const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
-    const entries = existing.status === STATUS.PENDING_DISPATCH
-      ? [{ ...base, action: "DISPATCHED", description: `Dispatched (${data.dispatchMode}${newSnapshot.vehicleNumber ? `, ${newSnapshot.vehicleNumber}` : ""})` }]
+    const entries = firstDispatch
+      ? [{ ...base, action: "DISPATCHED", description: `Dispatched (${dispatchMode}${newSnapshot.vehicleNumber ? `, ${newSnapshot.vehicleNumber}` : ""})` }]
       : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
     if (!legacyDispatched && serials.length) {
       const via = { CAMERA: 0, SCANNER: 0, MANUAL: 0 };
@@ -1041,6 +1136,78 @@ export async function dispatchOutward(req, res) {
   } catch (error) {
     console.error("Dispatch outward error:", error);
     return res.status(error.status || 500).json({ message: error.message || "Failed to save dispatch details" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TRANSPORTATION  (Warehouse manager, Super admin) - opens once Account has approved the entry
+// Vehicle type: "Dedicated vehicle" (vehicle no. + driver name + driver contact) or "Transportation" (ID + name).
+// Submitting it unlocks the document upload for the account team. Can be corrected until the entry is dispatched.
+// ---------------------------------------------------------------------------
+export async function saveTransportation(req, res) {
+  try {
+    const { id } = req.params;
+    const data = req.body || {};
+    const existing = await prisma.min.findUnique({
+      where: { id },
+      select: {
+        id: true, warehouseId: true, outwardNumber: true, status: true, transportSubmittedAt: true,
+        transportMode: true, dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, transporterId: true, transporterName: true, transporterContact: true,
+      },
+    });
+    if (!existing) return res.status(404).json({ message: "Outward entry not found" });
+    await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
+
+    const allowed = [...APPROVED_STATUSES, ...DISPATCHED_STATUSES];
+    // Same message whatever the reason, so nothing about approval leaks to the warehouse.
+    if (!allowed.includes(existing.status)) return res.status(409).json({ message: "This entry is not ready for transportation details" });
+
+    // Once Account has uploaded its documents the submitted details are frozen (nobody can change them, Super admin included).
+    if (existing.transportSubmittedAt) {
+      const [docs, refs] = await Promise.all([
+        prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { docCategory: true } }),
+        prisma.minReferenceDocument.findMany({ where: { minId: id }, select: { refDocType: true } }),
+      ]);
+      if (transportLockReason(existing, docs, refs)) return res.status(409).json({ message: TRANSPORT_LOCK_MESSAGE });
+    }
+
+    const problem = validateTransport(data);
+    if (problem) return res.status(422).json({ message: problem });
+    const columns = toTransportColumns(data);
+    const isFirstTime = !existing.transportSubmittedAt;
+
+    const { count } = await prisma.min.updateMany({
+      where: { id, status: { in: allowed } },
+      data: {
+        ...columns,
+        ...(isFirstTime ? { transportSubmittedById: req.user.id, transportSubmittedByName: req.user.name, transportSubmittedAt: new Date() } : {}),
+      },
+    });
+    if (!count) return res.status(409).json({ message: "This entry was just updated by someone else" });
+    // TRANSPORT_PENDING -> DOCS_PENDING (or READY_FOR_DISPATCH when the release document is already there).
+    if (isFirstTime) await syncApprovedStage(prisma, id);
+
+    const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
+    const describe = (c) => c.mode === "DEDICATED"
+      ? `Dedicated vehicle ${c.vehicleNumber} (driver ${c.driverName}, ${c.driverContact})`
+      : `Transportation ${c.transporterName} (ID ${c.transporterId}, contact ${c.transporterContact})`;
+    const entries = isFirstTime
+      ? [{ ...base, action: "TRANSPORT_SUBMITTED", description: `Transportation details submitted: ${describe({ ...columns, mode: columns.transportMode })}` }]
+      : diffFields(existing, columns, ["transportMode", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "transporterId", "transporterName", "transporterContact"])
+          .map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
+    if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (transportation) failed:", err));
+
+    const [result, documents] = await Promise.all([
+      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
+      prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
+    ]);
+    return res.json({
+      message: isFirstTime ? "Transportation details submitted. The account team can now upload the documents." : "Transportation details updated",
+      data: finishFor(req, result, documents),
+    });
+  } catch (error) {
+    console.error("Save transportation error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to save transportation details" });
   }
 }
 
@@ -1079,7 +1246,7 @@ export async function saveReceiving(req, res) {
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
 
     await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
-    if (existing.status !== STATUS.DISPATCHED) {
+    if (!isDispatchedStatus(existing.status)) {
       return res.status(409).json({ message: "Receiving details can be added only after the entry is dispatched" });
     }
 
@@ -1118,9 +1285,10 @@ export async function saveReceiving(req, res) {
     try {
       await prisma.$transaction(async (tx) => {
         const { count } = await tx.min.updateMany({
-          where: { id, status: STATUS.DISPATCHED },
+          where: { id, status: { in: DISPATCHED_STATUSES } },
           data: {
             ...snapshot,
+            status: STATUS.DELIVERED,
             ...(isFirstTime ? { receivedById: req.user.id, receivedByName: req.user.name, receivedAt: new Date() } : {}),
           },
         });
@@ -1150,7 +1318,7 @@ export async function saveReceiving(req, res) {
 
     const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
     const entries = isFirstTime
-      ? [{ ...base, action: "RECEIVED", description: `Received by ${snapshot.receiverName} on ${day(snapshot.receivedDate)}` }]
+      ? [{ ...base, action: "RECEIVED", description: `Delivered - received by ${snapshot.receiverName} on ${day(snapshot.receivedDate)}` }]
       : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
     for (const u of uploaded) {
       entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
@@ -1205,25 +1373,44 @@ export async function saveAccountDocuments(req, res) {
         refDocNumber: String(r.refDocNumber || "").trim() || eway,
         ewayBillNumber: eway || null,
         // Only a DC Challan carries a vehicle number.
-        vehicleNumber: type === "DC Challan" ? String(r.vehicleNumber || "").trim() || null : null,
+        // Only a DC Challan carries a vehicle number; it defaults to the one from the transportation form.
+        vehicleNumber: type === "DC Challan" ? String(r.vehicleNumber || "").trim() || "__TRANSPORT__" : null,
       });
     }
 
     const existing = await prisma.min.findUnique({
       where: { id },
-      select: { id: true, warehouseId: true, outwardNumber: true, status: true, createdById: true },
+      select: { id: true, warehouseId: true, outwardNumber: true, status: true, createdById: true, piAmount: true, vehicleNumber: true, transportSubmittedAt: true },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
     await assertEntryVisible(req, existing);
-    if (!ACCOUNT_DOC_STATUSES.includes(existing.status)) {
-      return res.status(409).json({ message: "Documents can no longer be changed after dispatch" });
+    // Account can add documents only after approval AND after the warehouse manager has submitted the vehicle /
+    // transportation details.
+    const blocked = accountDocsBlock(existing);
+    if (blocked) return res.status(409).json({ message: blocked });
+    for (const r of refs) if (r.vehicleNumber === "__TRANSPORT__") r.vehicleNumber = existing.vehicleNumber || null;
+
+    // Once any document other than the Invoice is there, the entry is shared with the warehouse manager.
+    // Above Rs. 1,00,000 the e-way bill document must be there first.
+    const savedDocs = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { docCategory: true } });
+    const lowerCat = (v) => String(v || "").trim().toLowerCase();
+    const incoming = new Set(categories.map(lowerCat));
+    const resulting = [...savedDocs.filter((d) => !incoming.has(lowerCat(d.docCategory))), ...categories.map((c) => ({ docCategory: c }))];
+    const savedRefs = await prisma.minReferenceDocument.findMany({ where: { minId: id }, select: { refDocType: true } });
+    const wasShared = hasReleaseDocument(savedDocs, savedRefs);
+    // Account's reference rows are replaced by the ones in this request; the manager's rows stay.
+    const resultingRefs = [...savedRefs.filter((r) => !isAccountRefType(r.refDocType)), ...refs];
+    const willShare = hasReleaseDocument(resulting, resultingRefs);
+    if (willShare) {
+      const ewayIssue = ewayBillProblem({ piAmount: existing.piAmount, documents: resulting });
+      if (ewayIssue) return res.status(422).json({ message: ewayIssue });
     }
 
     const uploaded = files.length ? await storeOutwardFiles(files, categories, existing.outwardNumber) : [];
     let replaced = [];
     try {
       await prisma.$transaction(async (tx) => {
-        const current = await tx.min.findFirst({ where: { id, status: { in: ACCOUNT_DOC_STATUSES } }, select: { id: true } });
+        const current = await tx.min.findFirst({ where: { id, status: { in: ACCOUNT_DOC_STATUSES }, transportSubmittedAt: { not: null } }, select: { id: true } });
         if (!current) throw httpError(409, "This entry was just updated by someone else");
 
         await tx.min.update({
@@ -1244,6 +1431,8 @@ export async function saveAccountDocuments(req, res) {
             })),
           });
         }
+        // DOCS_PENDING <-> READY_FOR_DISPATCH, depending on whether a non-Invoice account document exists now.
+        await syncApprovedStage(tx, id);
       });
     } catch (txError) {
       if (uploaded.length) await supabase.storage.from(SUPABASE_BUCKET).remove(uploaded.map((u) => u.fileKey)).catch(() => {});
@@ -1256,8 +1445,10 @@ export async function saveAccountDocuments(req, res) {
 
     const base = { entityType: "OUTWARD", entityId: id, entityNumber: existing.outwardNumber, userId: req.user.id, warehouseId: existing.warehouseId };
     const entries = [{ ...base, action: "UPDATED", description: `Account reference documents saved (${refs.length})` }];
+    if (willShare && !wasShared) entries.push({ ...base, action: "UPDATED", description: "Documents shared with the warehouse manager - dispatch form opened" });
     for (const u of uploaded) {
-      entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
+      const isInvoice = isInvoiceDocCategory(u.docCategory);
+      entries.push({ ...base, action: isInvoice ? "INVOICE_CREATED" : "DOCUMENT_ADDED", description: isInvoice ? `Invoice created by ${req.user.name}` : `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
     }
     recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (account documents) failed:", err));
 
@@ -1293,7 +1484,7 @@ export async function deleteOutward(req, res) {
       select: { id: true, outwardNumber: true, warehouseId: true, status: true, piFileKey: true, items: { select: { proofFileKey: true } } },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
-    if (existing.status !== STATUS.DISPATCHED) {
+    if (!isDispatchedStatus(existing.status)) {
       return res.status(409).json({ message: "Only a dispatched outward entry can be deleted" });
     }
 

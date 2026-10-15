@@ -69,7 +69,7 @@ export default function OutwardReceiving() {
     return () => dispatch(clearCurrentOutward());
   }, [dispatch, id]);
 
-  const dispatched = outward?.dispatchState === "Dispatched" || outward?.workflowStatus === "DISPATCHED";
+  const dispatched = outward?.dispatchState === "Dispatched" || ["DISPATCHED", "DELIVERED"].includes(outward?.workflowStatus);
   const alreadyReceived = isReceived(outward);
 
   // Prefill when the receiving details were saved before (editing / correcting them).
