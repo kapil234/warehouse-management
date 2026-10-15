@@ -31,10 +31,9 @@ export const createGrnSchema = z.object({
     z.enum(INWARD_TYPES)
   ),
   supplierName: z.string().min(1, 'Supplier name is required'),
-  refDocType: z.enum(['Invoice', 'Delivery Challan', 'Return Note']),
+  refDocType: z.enum(['Invoice', 'E-way Bill', 'Delivery Challan', 'Return Note', 'Other']),
   refDocNumber: z.string().optional(),
   refDocDate: z.string().refine((v) => !isNaN(Date.parse(v)), 'Invalid inward date/time'),
-  ewayBillNumber: z.string().optional(),
   otherDocumentNumbers: z.array(documentNumberSchema).optional().default([]),
   remarks: z.string().optional(),
   items: z.array(grnItemSchema).min(1, 'At least one item is required'),

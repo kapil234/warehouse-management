@@ -117,7 +117,7 @@ export default function HistoryPanel({ entries = [], status = "idle" }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-[calc(100vw-2rem)] max-w-md overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:w-[26rem]">
+        <div className="fixed inset-x-3 top-20 z-40 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:z-30 sm:mt-2 sm:w-[26rem]">
           <div className="flex items-center justify-between border-b px-4 py-3">
             <p className="text-sm font-semibold text-gray-900">Activity history</p>
             <button type="button" onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-700">
@@ -125,7 +125,7 @@ export default function HistoryPanel({ entries = [], status = "idle" }) {
             </button>
           </div>
 
-          <div className="max-h-[28rem] overflow-y-auto">
+          <div className="max-h-[calc(100dvh-11rem)] overflow-y-auto sm:max-h-[28rem]">
             {loading && (
               <div className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
                 <Loader2 size={16} className="animate-spin" />

@@ -24,7 +24,7 @@ import prisma from "../config/prisma.js";
  *                       The Invoice is internal: it is NEVER shared with the warehouse.
  *                       Any other document (E-way bill / DC Challan / Without Invoice / Other) releases the entry to the warehouse.
  *   READY_FOR_DISPATCH  Dispatch form opens for the manager (vehicle / driver read-only, references, documents, serial scan)
- *   DISPATCHED          Dispatch details saved ("Delivered pending"); Receiving form opens
+ *   DISPATCHED          Dispatch details saved ("Shipped"); Receiving form opens
  *   DELIVERED           Receiving form saved
  *
  * (PENDING_DISPATCH is the old single "approved" value. It is kept in the enum only so old rows stay valid; the

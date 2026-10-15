@@ -356,7 +356,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     }
     if (disabled) return <span className="text-xs text-gray-400">-</span>;
     return (
-      <div className={`flex items-center ${mobile ? "w-full gap-1.5 py-0" : "min-w-[330px] gap-2 py-1"} ${selected === rowIndex ? "rounded-lg bg-blue-50 p-1 ring-1 ring-blue-300" : ""}`}>
+      <div className={`flex items-center ${mobile ? "w-full gap-1.5 py-0" : "min-w-[330px] gap-2 py-1"}`}>
         <input
           ref={(el) => { inputRefs.current[rowIndex] = el; }}
           value={drafts[rowIndex] || ""}
@@ -367,13 +367,13 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           onFocus={() => selectRow(rowIndex)}
           onChange={(e) => setDrafts((d) => ({ ...d, [rowIndex]: cleanSerialInput(e.target.value) }))}
           onKeyDown={(e) => handleKeyDown(e, rowIndex)}
-          className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:ring-2 focus:ring-blue-500 ${mobile ? "px-3 py-2 text-sm" : "px-3 py-2 text-sm"}`}
+          className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:border-gray-300 focus:ring-0 ${mobile ? "px-2.5 py-1.5 text-sm" : "px-3 py-2 text-sm"}`}
         />
-        <button type="button" title="Add" onClick={() => submitDraft(rowIndex, "MANUAL")} className={`flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 font-semibold text-white hover:bg-black ${mobile ? "h-10 px-3 text-xs" : "h-9 px-3 text-xs"}`}>
-          <Plus size={mobile ? 14 : 14} />Add
+        <button type="button" title="Add" onClick={() => submitDraft(rowIndex, "MANUAL")} className={`flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 font-semibold text-white hover:bg-black ${mobile ? "h-9 px-2.5 text-xs" : "h-9 px-3 text-xs"}`}>
+          <Plus size={14} />Add
         </button>
-        <button type="button" onClick={() => openCamera(rowIndex)} className={`flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 font-semibold text-white hover:bg-blue-700 ${mobile ? "h-10 px-3 text-xs" : "h-9 px-3 text-xs"}`}>
-          <Camera size={15} />Scan
+        <button type="button" onClick={() => openCamera(rowIndex)} className={`flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 font-semibold text-white hover:bg-blue-700 ${mobile ? "h-9 px-2.5 text-xs" : "h-9 px-3 text-xs"}`}>
+          <Camera size={14} />Scan
         </button>
       </div>
     );
@@ -387,7 +387,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     if (!slots.length) return null;
     const dupCount = (text) => lines.reduce((n, l) => n + (values[l.key] || []).filter((x) => cleanSerialInput(x.serialNo).toLowerCase() === text).length, 0);
     return (
-      <tr className="border-b last:border-0">
+      <tr className={`border-b last:border-0 ${selected === rowIndex ? "bg-gray-100" : ""}`}>
         <td colSpan={colSpan} className="px-2 pb-4 pt-2 sm:px-3 sm:pt-4">
           <div className="flex flex-wrap items-center gap-2">
             {slots.map((s, i) => {
@@ -411,7 +411,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     if (!rows[rowIndex]) return null;
     const hasChips = rowSlots(rows[rowIndex]).some((s) => cleanSerialInput(s.serialNo));
     return (
-      <tr className={`sm:hidden ${hasChips ? "" : "border-b last:border-0"}`}>
+      <tr className={`sm:hidden ${hasChips ? "" : "border-b last:border-0"} ${selected === rowIndex ? "bg-gray-100" : ""}`}>
         <td colSpan={colSpan} className="px-2 pb-3 pt-1">{inputCell(item, rowIndex, true)}</td>
       </tr>
     );
@@ -460,7 +460,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   /** Props for the item's main <tr>: tap the row to make it the item that scanners write to. */
   const rowProps = (rowIndex) => ({
     onClick: () => { if (rows[rowIndex]) selectRow(rowIndex); },
-    className: rows[rowIndex] ? `cursor-pointer ${selected === rowIndex ? "bg-blue-50/70" : "hover:bg-gray-50"}` : "",
+    className: rows[rowIndex] ? `cursor-pointer ${selected === rowIndex ? "bg-gray-100 [&>td:first-child]:shadow-[inset_4px_0_0_#111827]" : "hover:bg-gray-50"}` : "",
     "aria-selected": selected === rowIndex,
   });
 

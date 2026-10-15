@@ -204,6 +204,10 @@ export async function listGrn(req, res) {
                     mode: "insensitive",
                   },
                 },
+
+                { items: { some: { sku: { contains: search, mode: "insensitive" } } } },
+
+                { items: { some: { category: { contains: search, mode: "insensitive" } } } },
               ],
             }
           : {},
@@ -600,7 +604,7 @@ export async function updateGrn(req, res) {
       select: {
         id: true, warehouseId: true, grnNumber: true,
         inwardType: true, supplierName: true, companyName: true,
-        refDocType: true, refDocNumber: true, ewayBillNumber: true, remarks: true,
+        refDocType: true, refDocNumber: true, remarks: true,
         items: { select: { category: true, sku: true, companyName: true, quantity: true, uom: true } },
       },
     });
@@ -629,7 +633,7 @@ export async function updateGrn(req, res) {
     if (!data.companyId || data.companyId !== warehouse.companyId) {
       return res.status(400).json({ message: "Selected company does not match this warehouse." });
     }
-    if (!references.length || !references.some((r) => r?.refDocNumber || r?.ewayBillNumber)) {
+    if (!references.length || !references.some((r) => r?.refDocNumber)) {
       return res.status(422).json({ message: "At least one reference document is required." });
     }
     if (!items.length) return res.status(422).json({ message: "At least one item is required." });
@@ -647,11 +651,10 @@ export async function updateGrn(req, res) {
     }
  
     const normalizedRefs = references
-      .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
+      .filter((r) => r && r.refDocNumber)
       .map((r) => ({
         refDocType: String(r.refDocType || "Other").trim(),
-        refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
-        ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
+        refDocNumber: String(r.refDocNumber).trim(),
       }));
  
     // Snapshot the "new" values in the same shape as `existing` so we can
@@ -662,7 +665,6 @@ export async function updateGrn(req, res) {
       companyName: data.companyName.trim(),
       refDocType: normalizedRefs[0].refDocType,
       refDocNumber: normalizedRefs[0].refDocNumber,
-      ewayBillNumber: normalizedRefs[0].ewayBillNumber,
       remarks: data.remarks?.trim() || null,
     };
     const newItems = items.map((item) => ({
@@ -671,7 +673,7 @@ export async function updateGrn(req, res) {
       companyName: item.companyName ? String(item.companyName).trim() || null : null,
     }));
     const fieldChanges = diffFields(existing, newSnapshot, [
-      "inwardType", "supplierName", "companyName", "refDocType", "refDocNumber", "ewayBillNumber", "remarks",
+      "inwardType", "supplierName", "companyName", "refDocType", "refDocNumber", "remarks",
     ]);
     const itemChanges = diffItems(existing.items, newItems);
  
@@ -685,7 +687,6 @@ export async function updateGrn(req, res) {
           refDocType: normalizedRefs[0].refDocType,
           refDocNumber: normalizedRefs[0].refDocNumber,
           refDocDate: data.refDocDate ? new Date(data.refDocDate) : new Date(),
-          ewayBillNumber: normalizedRefs[0].ewayBillNumber,
           remarks: data.remarks?.trim() || null,
           items: {
             deleteMany: {},
@@ -938,13 +939,12 @@ export async function createGrn(req, res) {
     const referenceDocumentRows = (
       Array.isArray(data.referenceDocuments)
         ? data.referenceDocuments
-        : [{ refDocType: data.refDocType, refDocNumber: data.refDocNumber, ewayBillNumber: data.ewayBillNumber }]
+        : [{ refDocType: data.refDocType, refDocNumber: data.refDocNumber }]
     )
-      .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
+      .filter((r) => r && r.refDocNumber)
       .map((r) => ({
         refDocType: String(r.refDocType || "Other").trim(),
-        refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
-        ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
+        refDocNumber: String(r.refDocNumber).trim(),
       }));
  
     const itemRows = items.map((item) => ({
@@ -984,7 +984,6 @@ export async function createGrn(req, res) {
                 refDocType: data.refDocType,
                 refDocNumber: data.refDocNumber,
                 refDocDate: data.refDocDate ? new Date(data.refDocDate) : new Date(),
-                ewayBillNumber: data.ewayBillNumber || null,
                 remarks: data.remarks || null,
                 createdById: req.user.id,
                 items: { createMany: { data: itemRows } },
@@ -1897,7 +1896,7 @@ export async function listGrnHistory(req, res) {
 //       select: {
 //         id: true, warehouseId: true, grnNumber: true,
 //         inwardType: true, supplierName: true, companyName: true,
-//         refDocType: true, refDocNumber: true, ewayBillNumber: true, remarks: true,
+//         refDocType: true, refDocNumber: true, remarks: true,
 //         items: { select: { category: true, sku: true, companyName: true, quantity: true, uom: true } },
 //       },
 //     });
@@ -1926,7 +1925,7 @@ export async function listGrnHistory(req, res) {
 //     if (!data.companyId || data.companyId !== warehouse.companyId) {
 //       return res.status(400).json({ message: "Selected company does not match this warehouse." });
 //     }
-//     if (!references.length || !references.some((r) => r?.refDocNumber || r?.ewayBillNumber)) {
+//     if (!references.length || !references.some((r) => r?.refDocNumber)) {
 //       return res.status(422).json({ message: "At least one reference document is required." });
 //     }
 //     if (!items.length) return res.status(422).json({ message: "At least one item is required." });
@@ -1944,10 +1943,10 @@ export async function listGrnHistory(req, res) {
 //     }
 
 //     const normalizedRefs = references
-//       .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
+//       .filter((r) => r && r.refDocNumber)
 //       .map((r) => ({
 //         refDocType: String(r.refDocType || "Other").trim(),
-//         refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
+//         refDocNumber: String(r.refDocNumber).trim(),
 //         ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
 //       }));
 
@@ -1968,7 +1967,7 @@ export async function listGrnHistory(req, res) {
 //       companyName: item.companyName ? String(item.companyName).trim() || null : null,
 //     }));
 //     const fieldChanges = diffFields(existing, newSnapshot, [
-//       "inwardType", "supplierName", "companyName", "refDocType", "refDocNumber", "ewayBillNumber", "remarks",
+//       "inwardType", "supplierName", "companyName", "refDocType", "refDocNumber", "remarks",
 //     ]);
 //     const itemChanges = diffItems(existing.items, newItems);
 
@@ -2313,11 +2312,11 @@ export async function listGrnHistory(req, res) {
 //                 },
 
 //                 referenceDocuments: {
-//                   create: (Array.isArray(data.referenceDocuments) ? data.referenceDocuments : [{ refDocType: data.refDocType, refDocNumber: data.refDocNumber, ewayBillNumber: data.ewayBillNumber }])
-//                     .filter((r) => r && (r.refDocNumber || r.ewayBillNumber))
+//                   create: (Array.isArray(data.referenceDocuments) ? data.referenceDocuments : [{ refDocType: data.refDocType, refDocNumber: data.refDocNumber }])
+//                     .filter((r) => r && r.refDocNumber)
 //                     .map((r) => ({
 //                       refDocType: String(r.refDocType || "Other").trim(),
-//                       refDocNumber: String(r.refDocNumber || r.ewayBillNumber || "N/A").trim(),
+//                       refDocNumber: String(r.refDocNumber).trim(),
 //                       ewayBillNumber: r.ewayBillNumber ? String(r.ewayBillNumber).trim() : null,
 //                     })),
 //                 },

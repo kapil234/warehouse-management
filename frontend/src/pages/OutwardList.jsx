@@ -1,3 +1,5 @@
+import FilterSelect from "../components/FilterSelect";
+import useSummaryEntries from "../features/shared/useSummaryEntries";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -116,7 +118,7 @@ const STATUS_FILTERS_FULL = [
   { value: "TRANSPORT_PENDING", label: "Awaiting transportation" },
   { value: "DOCS_PENDING", label: "Awaiting acc. documents" },
   { value: "READY_FOR_DISPATCH", label: "Ready for dispatch" },
-  { value: "DISPATCHED", label: "Delivered pending" },
+  { value: "DISPATCHED", label: "Shipped" },
   { value: "DELIVERED", label: "Delivered" },
   { value: "ON_HOLD", label: "On hold" },
   { value: "REJECTED", label: "Rejected" },
@@ -127,7 +129,7 @@ const STATUS_FILTERS_WAREHOUSE = [
   { value: "TRANSPORT_PENDING", label: "Awaiting transportation" },
   { value: "DOCS_PENDING", label: "Awaiting acc. documents" },
   { value: "READY_FOR_DISPATCH", label: "Ready for dispatch" },
-  { value: "DISPATCHED", label: "Delivered pending" },
+  { value: "DISPATCHED", label: "Shipped" },
   { value: "DELIVERED", label: "Delivered" },
 ];
 
@@ -214,7 +216,7 @@ function DateRangeFilter({ preset, from, to, onPresetSelect, onCustomApply }) {
         ref={buttonRef}
         type="button"
         onClick={() => (open ? setOpen(false) : openPanel())}
-        className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs ${
+        className={`flex w-full min-w-0 items-center justify-between gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:w-auto sm:justify-start sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs ${
           open || preset === "custom"
             ? "border-blue-300 bg-blue-50 text-blue-700"
             : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
@@ -381,6 +383,10 @@ export default function Outward() {
 
   const outwardData = useMemo(() => rawList.map(formatOutwardEntry), [rawList]);
 
+  // KPI cards use the unfiltered entries, so searching only changes the list below.
+  const summary = useSummaryEntries("/api/outward", scopedWarehouseId, waitingForWarehouse);
+  const summaryData = useMemo(() => summary.entries.map(formatOutwardEntry), [summary.entries]);
+
   // Search / type / date are now applied server-side (see queryParams above).
   // "Pending docs" only filters within the page currently on screen.
   const filteredData = outwardData.filter((item) =>
@@ -393,16 +399,16 @@ export default function Outward() {
     return groups;
   }, {});
 
-  const totalEntries = pagination.total;
+  const totalEntries = summary.total;
   // These three read off the current page only - a full across-all-pages
   // figure would need its own aggregate endpoint.
-  const documentsPending = outwardData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
-  const awaitingApproval = outwardData.filter((item) => item.workflowStatus === "PENDING_APPROVAL").length;
+  const documentsPending = summaryData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
+  const awaitingApproval = summaryData.filter((item) => item.workflowStatus === "PENDING_APPROVAL").length;
   // Approved but not dispatched yet = every step between approval and dispatch.
-  const awaitingDispatch = outwardData.filter((item) =>
+  const awaitingDispatch = summaryData.filter((item) =>
     item.workflowStatus ? ["PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"].includes(item.workflowStatus) : item.dispatchState === "Pending"
   ).length;
-  const dispatchedCount = outwardData.filter((item) =>
+  const dispatchedCount = summaryData.filter((item) =>
     item.workflowStatus ? ["DISPATCHED", "DELIVERED"].includes(item.workflowStatus) : item.dispatchState === "Dispatched"
   ).length;
 
@@ -454,18 +460,18 @@ export default function Outward() {
         </div>
 
         <div className="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:grid-cols-4 sm:gap-3">
-          <SummaryCard title="Total entries" value={loading ? "—" : totalEntries} icon={Truck} />
+          <SummaryCard title="Total entries" value={!summary.ready ? "—" : totalEntries} icon={Truck} />
           {isWarehouseRole ? (
             <>
-              <SummaryCard title="Pending dispatch" value={loading ? "—" : awaitingDispatch} icon={Clock3} />
-              <SummaryCard title="Documents pending" value={loading ? "—" : documentsPending} icon={FileWarning} danger />
-              <SummaryCard title="Dispatched" value={loading ? "—" : dispatchedCount} icon={CheckCircle2} />
+              <SummaryCard title="Pending dispatch" value={!summary.ready ? "—" : awaitingDispatch} icon={Clock3} />
+              <SummaryCard title="Documents pending" value={!summary.ready ? "—" : documentsPending} icon={FileWarning} danger />
+              <SummaryCard title="Dispatched" value={!summary.ready ? "—" : dispatchedCount} icon={CheckCircle2} />
             </>
           ) : (
             <>
-              <SummaryCard title="Pending approval" value={loading ? "—" : awaitingApproval} icon={Clock3} danger={awaitingApproval > 0} />
-              <SummaryCard title="Pending dispatch" value={loading ? "—" : awaitingDispatch} icon={FileWarning} />
-              <SummaryCard title="Dispatched" value={loading ? "—" : dispatchedCount} icon={CheckCircle2} />
+              <SummaryCard title="Pending approval" value={!summary.ready ? "—" : awaitingApproval} icon={Clock3} danger={awaitingApproval > 0} />
+              <SummaryCard title="Pending dispatch" value={!summary.ready ? "—" : awaitingDispatch} icon={FileWarning} />
+              <SummaryCard title="Dispatched" value={!summary.ready ? "—" : dispatchedCount} icon={CheckCircle2} />
             </>
           )}
         </div>
@@ -477,12 +483,12 @@ export default function Outward() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search DC no., invoice, customer or serial no."
+              placeholder="Search MIN no., DC no., invoice, customer, model or serial no."
               className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-8 pr-3 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 sm:py-2.5 sm:pl-9 sm:text-sm"
             />
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-1.5 sm:flex sm:flex-wrap sm:gap-2">
             <DateRangeFilter
               preset={datePreset}
               from={dateRange.from}
@@ -491,49 +497,13 @@ export default function Outward() {
               onCustomApply={handleDateCustomApply}
             />
 
-            {filters.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setActiveFilter(filter)}
-                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                  activeFilter === filter ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
-
-            {isWarehouseRole && (
-              <button
-                type="button"
-                onClick={() => setShowPendingOnly(!showPendingOnly)}
-                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                  showPendingOnly ? "border-red-200 bg-red-50 text-red-600" : "border-gray-300 bg-white text-gray-700"
-                }`}
-              >
-                Pending docs
-              </button>
-            )}
+            <FilterSelect ariaLabel="Type" value={activeFilter} onChange={setActiveFilter} options={filters.map((f) => ({ value: f, label: f }))} />
+            <FilterSelect ariaLabel="Status" value={statusFilter} onChange={setStatusFilter} options={statusFilters} />
           </div>
 
-          <div className="mt-2 flex flex-wrap gap-1.5 sm:gap-2">
-            {statusFilters.map((f) => (
-              <button
-                key={f.value || "all"}
-                type="button"
-                onClick={() => setStatusFilter(f.value)}
-                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                  statusFilter === f.value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
         </div>
 
-        {loading && (
+        {loading && rawList.length === 0 && (
           <div className="rounded-2xl border border-gray-200 bg-white px-5 py-10 text-center">
             <p className="text-sm text-gray-500">Loading outward entries...</p>
           </div>
@@ -552,8 +522,8 @@ export default function Outward() {
           </div>
         )}
 
-        {!loading && !listError && (
-          <div className="hidden overflow-hidden rounded-2xl border border-gray-200 bg-white md:block">
+        {(!loading || rawList.length > 0) && !listError && (
+          <div className={`hidden overflow-hidden rounded-2xl border border-gray-200 bg-white transition-opacity md:block ${loading ? "opacity-60" : ""}`}>
             <div className="border-b border-gray-200 px-5 py-4">
               <h2 className="text-sm font-semibold text-gray-900">Outward history</h2>
               <p className="mt-0.5 text-xs text-gray-500">{pagination.total} entries found</p>
@@ -683,8 +653,8 @@ export default function Outward() {
           </div>
         )}
 
-        {!loading && !listError && (
-          <div className="space-y-4 md:hidden">
+        {(!loading || rawList.length > 0) && !listError && (
+          <div className={`space-y-4 transition-opacity md:hidden ${loading ? "opacity-60" : ""}`}>
             {Object.entries(groupedData).map(([date, items]) => (
               <section key={date}>
                 <div className="mb-1.5 px-1">

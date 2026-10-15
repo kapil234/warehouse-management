@@ -1,3 +1,5 @@
+import FilterSelect from "../components/FilterSelect";
+import useSummaryEntries from "../features/shared/useSummaryEntries";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -288,7 +290,7 @@ function DateRangeFilter({
         onClick={() =>
           open ? setOpen(false) : openPanel()
         }
-        className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs ${
+        className={`flex w-full min-w-0 items-center justify-between gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:w-auto sm:justify-start sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs ${
           open || preset === "custom"
             ? "border-blue-300 bg-blue-50 text-blue-700"
             : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
@@ -533,6 +535,10 @@ export default function Inward() {
     [rawList]
   );
 
+  // KPI cards use the unfiltered entries, so searching only changes the list below.
+  const summary = useSummaryEntries("/api/grn", scopedWarehouseId, waitingForWarehouse);
+  const summaryData = useMemo(() => summary.entries.map(formatGrn), [summary.entries]);
+
   // Search / type / date are now applied server-side (see queryParams above).
   // "Pending docs" only filters within the page currently on screen - it
   // isn't a backend query param, unlike the others.
@@ -553,24 +559,24 @@ export default function Inward() {
     {}
   );
 
-  const totalEntries = pagination.total;
+  const totalEntries = summary.total;
 
   // These three read off the current page only (same as before pagination was
   // wired up for real) - a full across-all-pages figure would need its own
   // aggregate endpoint.
-  const todaysInward = inwardData.filter(
+  const todaysInward = summaryData.filter(
     (item) => item.date === "Today"
   ).length;
 
   const documentsPending =
-    inwardData.reduce(
+    summaryData.reduce(
       (total, item) =>
         total +
         (Number(item.pendingDocuments) || 0),
       0
     );
 
-  const completed = inwardData.filter(
+  const completed = summaryData.filter(
     (item) => item.statusType === "complete"
   ).length;
 
@@ -650,14 +656,14 @@ export default function Inward() {
         <div className="mb-4 grid grid-cols-2 gap-2 sm:mb-5 sm:grid-cols-4 sm:gap-3">
           <SummaryCard
             title="Total entries"
-            value={loading ? "—" : totalEntries}
+            value={!summary.ready ? "—" : totalEntries}
             icon={Package}
           />
 
           <SummaryCard
             title="Today's inward"
             value={
-              loading ? "—" : todaysInward
+              !summary.ready ? "—" : todaysInward
             }
             icon={Clock3}
           />
@@ -665,7 +671,7 @@ export default function Inward() {
           <SummaryCard
             title="Documents pending"
             value={
-              loading ? "—" : documentsPending
+              !summary.ready ? "—" : documentsPending
             }
             icon={FileWarning}
             danger
@@ -673,7 +679,7 @@ export default function Inward() {
 
           <SummaryCard
             title="Completed"
-            value={loading ? "—" : completed}
+            value={!summary.ready ? "—" : completed}
             icon={CheckCircle2}
           />
         </div>
@@ -691,12 +697,12 @@ export default function Inward() {
               onChange={(e) =>
                 setSearch(e.target.value)
               }
-              placeholder="Search GRN, invoice, supplier or company"
+              placeholder="Search GRN no., invoice, supplier, company or model"
               className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-8 pr-3 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 sm:py-2.5 sm:pl-9 sm:text-sm"
             />
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:gap-2">
             <DateRangeFilter
               preset={datePreset}
               from={dateRange.from}
@@ -709,42 +715,11 @@ export default function Inward() {
               }
             />
 
-            {filters.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() =>
-                  setActiveFilter(filter)
-                }
-                className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                  activeFilter === filter
-                    ? "border-blue-300 bg-blue-50 text-blue-700"
-                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
-
-            <button
-              type="button"
-              onClick={() =>
-                setShowPendingOnly(
-                  !showPendingOnly
-                )
-              }
-              className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:px-3 sm:py-2 sm:text-xs ${
-                showPendingOnly
-                  ? "border-red-200 bg-red-50 text-red-600"
-                  : "border-gray-300 bg-white text-gray-700"
-              }`}
-            >
-              Pending docs
-            </button>
+            <FilterSelect ariaLabel="Type" value={activeFilter} onChange={setActiveFilter} options={filters.map((f) => ({ value: f, label: f }))} />
           </div>
         </div>
 
-        {loading && (
+        {loading && rawList.length === 0 && (
           <div className="rounded-2xl border border-gray-200 bg-white px-5 py-10 text-center">
             <p className="text-sm text-gray-500">
               Loading inward entries...
@@ -770,8 +745,8 @@ export default function Inward() {
           </div>
         )}
 
-        {!loading && !listError && (
-          <div className="hidden overflow-hidden rounded-2xl border border-gray-200 bg-white md:block">
+        {(!loading || rawList.length > 0) && !listError && (
+          <div className={`hidden overflow-hidden rounded-2xl border border-gray-200 bg-white transition-opacity md:block ${loading ? "opacity-60" : ""}`}>
             <div className="border-b border-gray-200 px-5 py-4">
               <h2 className="text-sm font-semibold text-gray-900">
                 Inward history
@@ -989,8 +964,8 @@ export default function Inward() {
           </div>
         )}
 
-        {!loading && !listError && (
-          <div className="space-y-4 md:hidden">
+        {(!loading || rawList.length > 0) && !listError && (
+          <div className={`space-y-4 transition-opacity md:hidden ${loading ? "opacity-60" : ""}`}>
             {Object.entries(groupedData).map(
               ([date, items]) => (
                 <section key={date}>

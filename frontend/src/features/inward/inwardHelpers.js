@@ -207,7 +207,6 @@ export function formatGrn(grn, index) {
     refDocType: grn.refDocType || grn.ref_doc_type || "",
     refDocNumber: grn.refDocNumber || grn.ref_doc_number || "",
     refDocDate: grn.refDocDate || grn.ref_doc_date || "",
-    ewayBillNumber: grn.ewayBillNumber || grn.eway_bill_number || "",
     remarks: grn.remarks || "",
     documents,
     otherDocumentNumbers: grn.otherDocumentNumbers || grn.other_document_numbers || [],

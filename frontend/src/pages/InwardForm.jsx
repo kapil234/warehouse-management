@@ -42,7 +42,7 @@ import { formatInwardType } from "../features/inward/inwardHelpers";
  * - No serial-number UI or validation.
  * - Company name is beside Supplier.
  * - Reference documents are repeatable.
- * - Every reference row contains document type, reference number and E-way bill.
+ * - Every reference row contains document type and reference number.
  * - Documents section has the three default document types plus custom documents.
  * - Items are repeatable. Category and SKU / model are picked from the product
  *   list that admins manage on the Product Management page.
@@ -52,7 +52,6 @@ const DEFAULT_REFERENCE = () => ({
   id: crypto.randomUUID(),
   refDocType: "Invoice",
   refDocNumber: "",
-  ewayBillNumber: "",
 });
 
 const DEFAULT_DOCUMENTS = [
@@ -252,8 +251,8 @@ export default function InwardForm() {
       setCompanyName(x.warehouse?.company?.name || x.companyName || "");
       const refs = Array.isArray(x.referenceDocuments) && x.referenceDocuments.length
         ? x.referenceDocuments
-        : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "", ewayBillNumber: x.ewayBillNumber || "" }];
-      setReferenceDocuments(refs.map((r) => ({ ...DEFAULT_REFERENCE(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "", ewayBillNumber: r.ewayBillNumber || "" })));
+        : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "" }];
+      setReferenceDocuments(refs.map((r) => ({ ...DEFAULT_REFERENCE(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "" })));
       setItems((x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
       setRemarks(x.remarks || "");
       if (Array.isArray(x.documents) && x.documents.length) {
@@ -484,7 +483,6 @@ export default function InwardForm() {
       referenceDocuments.map((doc) => ({
         refDocType: doc.refDocType,
         refDocNumber: doc.refDocNumber.trim(),
-        ewayBillNumber: doc.ewayBillNumber.trim() || undefined,
       })),
     [referenceDocuments]
   );
@@ -560,7 +558,6 @@ export default function InwardForm() {
       refDocType: firstReference.refDocType,
       refDocNumber: firstReference.refDocNumber.trim(),
       refDocDate: formatDateForApi(inwardDateTime),
-      ewayBillNumber: firstReference.ewayBillNumber.trim() || undefined,
 
       referenceDocuments: referencePayload,
 
@@ -786,7 +783,7 @@ export default function InwardForm() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                       <label className={labelCls}>Reference doc type</label>
                       <div className="relative">
@@ -827,23 +824,6 @@ export default function InwardForm() {
                           )
                         }
                         placeholder="Enter document number"
-                        className={inputCls}
-                      />
-                    </div>
-
-                    <div>
-                      <label className={labelCls}>E-way bill number</label>
-                      <input
-                        type="text"
-                        value={reference.ewayBillNumber}
-                        onChange={(e) =>
-                          updateReference(
-                            reference.id,
-                            "ewayBillNumber",
-                            e.target.value
-                          )
-                        }
-                        placeholder="If above threshold"
                         className={inputCls}
                       />
                     </div>

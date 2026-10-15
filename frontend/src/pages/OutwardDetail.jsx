@@ -243,7 +243,7 @@ export default function OutwardDetail() {
     document: doc,
     required: false,
   }));
-  const currentStatus = isReceived(outward) ? "Delivered" : "Delivered pending";
+  const currentStatus = isReceived(outward) ? "Delivered" : "Shipped";
 
   // One row per reference document added on the form (invoice, e-way
   // bill, etc). Older records without a referenceDocuments array fall
@@ -472,9 +472,7 @@ export default function OutwardDetail() {
 
         <div className="bg-white rounded-xl border p-4 sm:p-6">
           <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Items</h2>
-
-          <div className={showCost ? "overflow-x-auto" : ""}>
-          <table className={`w-full text-[11px] sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
+          <table className="w-full text-[11px] sm:text-sm">
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-2 px-1 w-6 sm:py-3 sm:px-3 sm:w-auto">#</th>
@@ -482,14 +480,6 @@ export default function OutwardDetail() {
                 <th className="py-2 px-1 sm:py-3 sm:px-3">{isWarehouse ? "Model" : "SKU"}</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">Qty</th>
                 <th className="py-2 px-1 sm:py-3 sm:px-3">UOM</th>
-                {showCost && (
-                  <>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">Payment status</th>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">Approve By</th>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">UTR</th>
-                    <th className="py-2 px-1 sm:py-3 sm:px-3">Proof</th>
-                  </>
-                )}
               </tr>
             </thead>
             <tbody>
@@ -500,47 +490,52 @@ export default function OutwardDetail() {
                   <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
                   <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
                   <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
-                  {showCost && (
-                    <>
-                      <td className="py-2 px-1 sm:py-4 sm:px-3">
-                        <span
-                          className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold sm:text-xs ${
-                            item.paymentStatus === "COMPLETED"
-                              ? "bg-green-100 text-green-700"
-                              : item.paymentStatus === "PARTIALLY_COMPLETED"
-                              ? "bg-blue-100 text-blue-700"
-                              : "bg-amber-100 text-amber-700"
-                          }`}
-                        >
-                          {paymentStatusLabel(item.paymentStatus)}
-                        </span>
-                      </td>
-                      <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.approvedBy || "-"}</td>
-                      <td className="py-2 px-1 break-all sm:py-4 sm:px-3">{item.utrNumber || "-"}</td>
-                      <td className="py-2 px-1 sm:py-4 sm:px-3">
-                        {item.hasProof ? (
-                          <button type="button" onClick={() => handleViewProof(item.id)} className="inline-flex items-center gap-1 text-blue-700 hover:underline">
-                            <Paperclip size={13} /> View
-                          </button>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </>
-                  )}
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={showCost ? 8 : 5} className="text-center py-8 text-gray-500">
+                  <td colSpan={5} className="text-center py-8 text-gray-500">
                     No items found
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-          </div>
         </div>
+
+        {showCost && items.length > 0 && (() => {
+          // Payment is done once for the whole outward and saved on every item, so it is shown once here.
+          const pay = items.find((i) => i.paymentStatus && (i.utrNumber || i.hasProof || i.approvedBy)) || items[0];
+          const proofItem = items.find((i) => i.hasProof);
+          const badge = pay.paymentStatus === "COMPLETED" ? "bg-green-100 text-green-700" : pay.paymentStatus === "PARTIALLY_COMPLETED" ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700";
+          return (
+            <div className="bg-white rounded-xl border p-4 sm:p-6">
+              <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Payment details</h2>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-4">
+                <div>
+                  <p className="text-sm font-bold text-gray-900 sm:text-base">Payment status</p>
+                  <span className={`mt-1 inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold sm:text-xs ${badge}`}>{paymentStatusLabel(pay.paymentStatus)}</span>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 sm:text-base">Approve by</p>
+                  <p className="mt-1 break-words text-sm font-normal text-gray-700 text-gray-900">{pay.approvedBy || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 sm:text-base">UTR</p>
+                  <p className="mt-1 break-all text-sm font-normal text-gray-700 text-gray-900">{pay.utrNumber || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 sm:text-base">Proof</p>
+                  {proofItem ? (
+                    <button type="button" onClick={() => handleViewProof(proofItem.id)} className="mt-1 inline-flex items-center gap-1 text-sm font-normal text-gray-700 text-blue-700 hover:underline"><Paperclip size={14} /> View</button>
+                  ) : (
+                    <p className="mt-1 text-sm font-normal text-gray-700 text-gray-900">-</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {Array.isArray(outward.serials) && outward.serials.length > 0 && (
           <div className="bg-white rounded-xl border p-4 sm:p-6">

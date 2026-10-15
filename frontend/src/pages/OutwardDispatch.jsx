@@ -436,8 +436,8 @@ export default function OutwardDispatch() {
               <h2 className="text-sm font-semibold text-gray-900">Item details</h2>
               {serial.badge}
             </div>
-            <div className="overflow-x-auto rounded-lg border">
-              <table className={`w-full text-xs sm:text-sm ${showCost ? "min-w-[680px]" : ""}`}>
+            <div className="rounded-lg border">
+              <table className="w-full text-xs sm:text-sm">
                 <thead>
                   <tr className="border-b bg-gray-50 text-left text-gray-500">
                     <th className="px-1.5 py-2 sm:px-3">#</th>
@@ -446,41 +446,21 @@ export default function OutwardDispatch() {
                     <th className="px-1.5 py-2 sm:px-3">Qty</th>
                     <th className="px-1.5 py-2 sm:px-3">UOM</th>
                     {serial.hasSerials && <th className="hidden px-3 py-2 sm:table-cell">SR. No</th>}
-                    {showCost && (
-                      <>
-                        <th className="px-3 py-2">Payment status</th>
-                        <th className="px-3 py-2">Approve By</th>
-                        <th className="px-3 py-2">UTR</th>
-                        <th className="px-3 py-2">Proof</th>
-                      </>
-                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item, index) => (
                     <Fragment key={item.id || index}>
                     <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-sm last:border-0 ${serial.rowProps(index).className}`}>
-                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{index + 1}</td>
-                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.category || "-"}</td>
-                      <td className="whitespace-nowrap px-1.5 py-4 font-medium sm:px-3 sm:py-2">{item.sku || "-"}</td>
-                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.quantity}</td>
-                      <td className="px-1.5 py-4 sm:px-3 sm:py-2">{item.uom || "-"}</td>
+                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{index + 1}</td>
+                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.category || "-"}</td>
+                      <td className="break-words px-1.5 py-3 font-medium sm:whitespace-nowrap sm:px-3 sm:py-2">{item.sku || "-"}</td>
+                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.quantity}</td>
+                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.uom || "-"}</td>
                       {serial.hasSerials && <td className="hidden px-3 py-1 align-middle sm:table-cell">{serial.inputCell(item, index)}</td>}
-                      {showCost && (
-                        <>
-                          <td className="px-3 py-2">{paymentStatusLabel(item.paymentStatus)}</td>
-                          <td className="px-3 py-2 break-all">{item.approvedBy || "-"}</td>
-                          <td className="px-3 py-2 break-all">{item.utrNumber || "-"}</td>
-                          <td className="px-3 py-2">
-                            {item.hasProof ? (
-                              <button type="button" onClick={() => handleViewProof(item.id)} className="inline-flex items-center gap-1 text-blue-700 hover:underline"><Paperclip size={13} /> View</button>
-                            ) : "-"}
-                          </td>
-                        </>
-                      )}
                     </tr>
-                    {serial.hasSerials && serial.mobileInputRow(item, index, 5 + 1 + (showCost ? 4 : 0))}
-                    {serial.hasSerials && serial.listRow(item, index, 5 + 1 + (showCost ? 4 : 0))}
+                    {serial.hasSerials && serial.mobileInputRow(item, index, 5 + 1)}
+                    {serial.hasSerials && serial.listRow(item, index, 5 + 1)}
                     </Fragment>
                   ))}
                 </tbody>
@@ -488,6 +468,26 @@ export default function OutwardDispatch() {
             </div>
             {serial.hasSerials && <p className="mt-2 text-xs text-gray-500">Tap an item row to select it, then type the serial no. and press Enter / Add, tap Scan for the camera, or scan with a connected Bluetooth / Wi-Fi / USB scanner. Scans go only to the selected item and are listed under it.</p>}
           </section>
+
+          {showCost && items.length > 0 && (() => {
+            // Payment is done once for the whole outward and saved on every item, so it is shown once.
+            const pay = items.find((i) => i.paymentStatus && (i.utrNumber || i.hasProof || i.approvedBy)) || items[0];
+            const proofItem = items.find((i) => i.hasProof);
+            return (
+              <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
+                <h2 className="mb-4 text-sm font-semibold text-gray-900">Payment details</h2>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-4">
+                  <div><p className="text-sm font-bold text-gray-900 sm:text-base">Payment status</p><p className="mt-1 text-sm font-normal text-gray-700 text-gray-900">{paymentStatusLabel(pay.paymentStatus)}</p></div>
+                  <div><p className="text-sm font-bold text-gray-900 sm:text-base">Approve by</p><p className="mt-1 break-words text-sm font-normal text-gray-700 text-gray-900">{pay.approvedBy || "-"}</p></div>
+                  <div><p className="text-sm font-bold text-gray-900 sm:text-base">UTR</p><p className="mt-1 break-all text-sm font-normal text-gray-700 text-gray-900">{pay.utrNumber || "-"}</p></div>
+                  <div>
+                    <p className="text-sm font-bold text-gray-900 sm:text-base">Proof</p>
+                    {proofItem ? <button type="button" onClick={() => handleViewProof(proofItem.id)} className="mt-1 inline-flex items-center gap-1 text-sm font-normal text-gray-700 text-blue-700 hover:underline"><Paperclip size={14} /> View</button> : <p className="mt-1 text-sm font-normal text-gray-700 text-gray-900">-</p>}
+                  </div>
+                </div>
+              </section>
+            );
+          })()}
 
           {serial.camera}
 

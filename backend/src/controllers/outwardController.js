@@ -233,6 +233,9 @@ export async function listOutward(req, res) {
           { companyName: { contains: search, mode: "insensitive" } },
           { refDocNumber: { contains: search, mode: "insensitive" } },
           { piNumber: { contains: search, mode: "insensitive" } },
+          { items: { some: { sku: { contains: search, mode: "insensitive" } } } },
+          { items: { some: { category: { contains: search, mode: "insensitive" } } } },
+          { serials: { some: { serialNo: { contains: search, mode: "insensitive" } } } },
         ] } : {},
         type ? { outwardType: type } : {},
         dateFrom || dateTo ? { createdAt: {

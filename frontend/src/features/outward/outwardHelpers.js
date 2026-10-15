@@ -268,7 +268,7 @@ export const WORKFLOW_STATUS = {
   TRANSPORT_PENDING: { label: "Awaiting transportation", cls: "bg-blue-100 text-blue-700" },
   DOCS_PENDING: { label: "Awaiting acc. documents", cls: "bg-indigo-100 text-indigo-700" },
   READY_FOR_DISPATCH: { label: "Ready for dispatch", cls: "bg-teal-100 text-teal-700" },
-  DISPATCHED: { label: "Delivered pending", cls: "bg-amber-100 text-amber-700" },
+  DISPATCHED: { label: "Shipped", cls: "bg-amber-100 text-amber-700" },
   DELIVERED: { label: "Delivered", cls: "bg-green-100 text-green-700" },
   REJECTED: { label: "Rejected", cls: "bg-red-100 text-red-600" },
   ON_HOLD: { label: "On hold", cls: "bg-purple-100 text-purple-700" },
@@ -282,9 +282,9 @@ export const DISPATCH_STATE = {
 };
 
 // Once dispatched, EVERY role sees the receiving state instead of plain "Dispatched":
-// "Delivered pending" until the receiving form is filled, then "Delivered".
+// "Shipped" until the receiving form is filled, then "Delivered".
 export const RECEIVING_STATE = {
-  pending: { label: "Delivered pending", cls: "bg-amber-100 text-amber-700" },
+  pending: { label: "Shipped", cls: "bg-amber-100 text-amber-700" },
   completed: { label: "Delivered", cls: "bg-green-100 text-green-700" },
 };
 

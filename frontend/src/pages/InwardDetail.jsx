@@ -46,11 +46,11 @@ function downloadInwardPdf(inward, items, documents) {
   ]);
   const refs = Array.isArray(inward.referenceDocuments) && inward.referenceDocuments.length
     ? inward.referenceDocuments
-    : (inward.refDocNumber ? [{ refDocType: inward.refDocType, refDocNumber: inward.refDocNumber, ewayBillNumber: inward.ewayBillNumber }] : []);
+    : (inward.refDocNumber ? [{ refDocType: inward.refDocType, refDocNumber: inward.refDocNumber }] : []);
   doc.subheading("Reference Documents");
   doc.table({
-    columns: [{ header: "Reference Type", width: 150 }, { header: "Reference No.", width: 200 }, { header: "E-way Bill", width: 165 }],
-    rows: refs.map((r) => [r.refDocType || "-", r.refDocNumber || "-", r.ewayBillNumber || "-"]),
+    columns: [{ header: "Reference Type", width: 220 }, { header: "Reference No.", width: 295 }],
+    rows: refs.map((r) => [r.refDocType || "-", r.refDocNumber || "-"]),
   });
   doc.subheading("Items");
   doc.table({
@@ -287,10 +287,10 @@ export default function InwardDetail() {
             <p className="mb-3 text-sm font-semibold text-gray-700">Reference Documents</p>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-xs sm:text-sm">
-                <thead><tr className="border-b bg-gray-50 text-left text-gray-500"><th className="px-3 py-2">Reference Type</th><th className="px-3 py-2">Reference No.</th><th className="px-3 py-2">E-way Bill</th></tr></thead>
+                <thead><tr className="border-b bg-gray-50 text-left text-gray-500"><th className="px-3 py-2">Reference Type</th><th className="px-3 py-2">Reference No.</th></tr></thead>
                 <tbody>
-                  {(Array.isArray(inward.referenceDocuments) && inward.referenceDocuments.length ? inward.referenceDocuments : (inward.refDocNumber ? [{ refDocType: inward.refDocType, refDocNumber: inward.refDocNumber, ewayBillNumber: inward.ewayBillNumber }] : [])).map((ref, index) => (
-                    <tr key={ref.id || index} className="border-b last:border-0"><td className="px-3 py-2">{ref.refDocType || "-"}</td><td className="px-3 py-2">{ref.refDocNumber || "-"}</td><td className="px-3 py-2">{ref.ewayBillNumber || "-"}</td></tr>
+                  {(Array.isArray(inward.referenceDocuments) && inward.referenceDocuments.length ? inward.referenceDocuments : (inward.refDocNumber ? [{ refDocType: inward.refDocType, refDocNumber: inward.refDocNumber }] : [])).map((ref, index) => (
+                    <tr key={ref.id || index} className="border-b last:border-0"><td className="px-3 py-2">{ref.refDocType || "-"}</td><td className="px-3 py-2">{ref.refDocNumber || "-"}</td></tr>
                   ))}
                 </tbody>
               </table>
