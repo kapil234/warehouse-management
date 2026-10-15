@@ -303,7 +303,7 @@ export default function OutwardDocuments({
                         {staged.file.name} {" • "} {(staged.file.size / 1024).toFixed(1)} {" KB"}
                       </p>
                     ) : (
-                      <p className={`text-[11px] mt-1 sm:text-xs ${required ? "text-red-500" : "text-gray-400"}`}>{required ? "Not uploaded" : "Not uploaded (optional)"}</p>
+                      <p className={`text-[11px] mt-1 sm:text-xs ${required ? "text-red-500" : "text-gray-400"}`}>Not uploaded</p>
                     )}
                   </div>
                 </div>

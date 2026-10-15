@@ -282,20 +282,16 @@ export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?chall
 export const ACCOUNT_DOC_STATUSES = [STATUS.PENDING_APPROVAL, STATUS.REJECTED, STATUS.ON_HOLD, STATUS.PENDING_DISPATCH];
 
 /**
- * Above this PI amount (Rs.) an e-way bill is needed: either an e-way bill number
- * (an "E-way Bill" reference with its number) or the e-way bill document itself.
+ * Above this PI amount (Rs.) the e-way bill document must be uploaded before approval.
  */
 export const EWAY_BILL_THRESHOLD = 100000;
 
-export function ewayBillProblem({ piAmount, referenceDocuments = [], documents = [] }) {
+export function ewayBillProblem({ piAmount, documents = [] }) {
   if (!(Number(piAmount) > EWAY_BILL_THRESHOLD)) return null;
-  const hasNumber = referenceDocuments.some(
-    (r) => (/e-?way/i.test(String(r.refDocType || "")) && String(r.refDocNumber || "").trim()) || String(r.ewayBillNumber || "").trim()
-  );
   const hasDocument = documents.some((d) => /^e-?way/i.test(String(d.docCategory || "").trim()));
-  return hasNumber || hasDocument
+  return hasDocument
     ? null
-    : "The PI amount is above Rs. 1,00,000: add the e-way bill number (reference type E-way Bill) or upload the e-way bill document before approving.";
+    : "The PI amount is above Rs. 1,00,000: upload the e-way bill document before approving.";
 }
 
 

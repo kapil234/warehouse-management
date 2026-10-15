@@ -10,7 +10,7 @@ import {
   isAccountRef,
   isAccountDocCategory,
   isAboveEwayLimit,
-  hasEwayBill,
+  hasEwayDocument,
   isPlaceholder,
   refTypeLabel,
   refTypeDocument,
@@ -105,8 +105,8 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
     return slots;
   }, [references, aboveLimit]);
 
-  const ewayProvided = hasEwayBill(references, accountDocs, stagedDocs);
-  const EWAY_MESSAGE = `The PI amount is above ₹${EWAY_BILL_THRESHOLD.toLocaleString("en-IN")}: add the e-way bill number (reference type E-way Bill) or upload the e-way bill document before approving.`;
+  const ewayProvided = hasEwayDocument(accountDocs, stagedDocs);
+  const EWAY_MESSAGE = `The PI amount is above ₹${EWAY_BILL_THRESHOLD.toLocaleString("en-IN")}: upload the e-way bill document before approving.`;
 
   const handleSave = async () => {
     if (saving) return false;
@@ -250,13 +250,13 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, canA
         deferred
         stagedFiles={stagedDocs}
         onStagedChange={setStagedDocs}
-        requiredDocuments={[]}
-        optionalDocuments={documentSlots}
+        requiredDocuments={aboveLimit ? ["E-way bill"] : []}
+        optionalDocuments={documentSlots.filter((s) => !(aboveLimit && /^e-?way/i.test(s)))}
         addMenuTypes={["Invoice", "E-way bill", "DC challan", "Other"]}
         otherPrefix={ACCOUNT_DOC_PREFIX}
         showSummary={false}
         title="Documents"
-        subtitle="One row for each reference document above. Uploading is optional. Files are saved when you approve, hold or reject."
+        subtitle="One row for each reference document above. E-way bill upload is required when the PI amount is above ₹1,00,000. Files are saved when you approve, hold or reject."
       />
 
       <div className="flex flex-wrap items-center justify-end gap-3">

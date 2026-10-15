@@ -3,7 +3,13 @@
 // Serials belong to category + SKU (rows with the same SKU are added up), never to a row id.
 
 export const SERIAL_UOM = "Pcs";
-export const needsSerials = (item) => String(item?.uom || "").trim().toLowerCase() === SERIAL_UOM.toLowerCase();
+// AC / DC cables are measured by length, so they never carry serial numbers (even if the UOM is changed to Pcs).
+export const isCableCategory = (category) => {
+  const text = String(category || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return /\bcable\b/.test(text) && /\b(ac|dc)\b/.test(text);
+};
+export const needsSerials = (item) =>
+  !isCableCategory(item?.category) && String(item?.uom || "").trim().toLowerCase() === SERIAL_UOM.toLowerCase();
 export const serialKey = (category, sku) => `${String(category || "").trim().toLowerCase()}||${String(sku || "").trim().toLowerCase()}`;
 export const cleanSerialInput = (value) => String(value ?? "").replace(/\s+/g, "");
 

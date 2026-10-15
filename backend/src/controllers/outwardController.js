@@ -783,13 +783,10 @@ export async function approveOutward(req, res) {
     const min = await loadForDecision(req, APPROVABLE_STATUSES, "This entry is not waiting for approval");
     const remarks = req.body?.remarks?.trim() || null;
 
-    // Above Rs. 1,00,000 an e-way bill (number or document) must be on the entry before it is approved.
+    // Above Rs. 1,00,000 an e-way bill document must be on the entry before it is approved.
     if (Number(min.piAmount) > EWAY_BILL_THRESHOLD) {
-      const [referenceDocuments, documents] = await Promise.all([
-        prisma.minReferenceDocument.findMany({ where: { minId: min.id }, select: { refDocType: true, refDocNumber: true, ewayBillNumber: true } }),
-        prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, select: { docCategory: true } }),
-      ]);
-      const problem = ewayBillProblem({ piAmount: min.piAmount, referenceDocuments, documents });
+      const documents = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, select: { docCategory: true } });
+      const problem = ewayBillProblem({ piAmount: min.piAmount, documents });
       if (problem) return res.status(422).json({ message: problem });
     }
 

@@ -33,6 +33,8 @@ const REF_TYPE_DOCUMENT = {
   Invoice: "Invoice",
   "E-way Bill": "E-way bill",
   "DC Challan": "DC challan",
+  // Account's "Other" is stored as "Accounts other" (shown as "Other") so it never clashes with the manager's "Other".
+  "Other (Accounts)": "Accounts other",
   "Delivery Challan": "Delivery challan",
   "Return Note": "Return note",
   Bilty: "Bilty",
@@ -46,6 +48,8 @@ export const refNumberLabel = (type) =>
 export const EWAY_BILL_THRESHOLD = 100000;
 export const isAboveEwayLimit = (piAmount) => Number(piAmount) > EWAY_BILL_THRESHOLD;
 const isEwayCategory = (category) => /^e-?way/i.test(String(category || "").trim());
+// True when an e-way bill DOCUMENT (uploaded or picked) exists - the e-way bill number alone is not enough.
+export const hasEwayDocument = (docs = [], staged = []) => [...docs, ...staged].some((d) => isEwayCategory(d.docCategory));
 // refs = rows being edited ({ refDocType, refDocNumber, ewayBillNumber }); docs / staged = uploaded and picked files.
 export const hasEwayBill = (refs = [], docs = [], staged = []) =>
   refs.some((r) => (/e-?way/i.test(String(r.refDocType || "")) && String(r.refDocNumber || "").trim()) || String(r.ewayBillNumber || "").trim()) ||

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Plus, X } from "lucide-react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Camera, CheckCircle2, Plus, X, Zap, ZapOff } from "lucide-react";
+import { Html5Qrcode, Html5QrcodeSupportedFormats as F } from "html5-qrcode";
 import { toast } from "react-toastify";
 import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../features/outward/serialHelpers";
 
@@ -20,6 +20,22 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../featu
  */
 
 const READER_ID = "serial-camera-reader";
+
+// Only the formats that serial labels really use. Fewer formats = faster and more accurate decoding on phones.
+const FORMATS = [F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.QR_CODE, F.DATA_MATRIX, F.PDF_417, F.AZTEC].filter((f) => f !== undefined);
+// Use the phone's own (native, much better) barcode detector when the browser has one.
+const readerConfig = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, experimentalFeatures: { useBarCodeDetectorIfSupported: true }, verbose: false };
+// Wide scan area (barcodes are long and thin) that always fits inside the preview.
+const qrbox = (w, h) => ({ width: Math.max(120, Math.floor(w * 0.92)), height: Math.max(100, Math.floor(Math.min(h * 0.7, 280))) });
+
+const cameraErrorMessage = (err) => {
+  const name = err?.name || String(err || "");
+  if (!window.isSecureContext) return "Camera needs a secure (https) page. Open the site with https, or type / use a scanner instead.";
+  if (/NotAllowed|Permission/i.test(name)) return "Camera permission is blocked. Allow camera access for this site in the browser settings, then tap Scan again.";
+  if (/NotFound|DevicesNotFound/i.test(name)) return "No camera found on this device.";
+  if (/NotReadable|TrackStart|AbortError/i.test(name)) return "Camera is busy in another app / tab. Close it and try again.";
+  return "Camera could not be opened. Allow camera access, or type / use a scanner instead.";
+};
 const SCAN_MAX_GAP_MS = 35; // a scanner types far faster than a person
 const SCAN_MIN_LENGTH = 4;
 
@@ -49,11 +65,13 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lastScan, setLastScan] = useState("");
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
+  const [camTools, setCamTools] = useState({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
 
   const inputRefs = useRef({}); // rowIndex -> input element
   const keyStats = useRef({ start: 0, last: 0, count: 0 });
   const lastDecoded = useRef({ text: "", at: 0 });
   const activeRow = useRef(0);
+  const trackRef = useRef(null);
 
   // Rows that need serials: where their serials sit inside the line's slots (rows with the same SKU share one line).
   const rows = useMemo(() => {
@@ -190,26 +208,93 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   // Camera (continuous): each code is added; closes when everything is filled.
   useEffect(() => {
     if (!cameraOpen) return undefined;
-    const reader = new Html5Qrcode(READER_ID);
-    const started = reader.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 280, height: 120 } },
-      (text) => {
-        const now = Date.now();
-        if (text === lastDecoded.current.text && now - lastDecoded.current.at < 2500) return;
-        lastDecoded.current = { text, at: now };
-        if (addSerialRef.current(text, "CAMERA")) beep();
-      },
-      () => {}
-    );
-    started.catch(() => {
-      toast.error("Camera could not be opened. Allow camera access (the site must use https), or type / use a scanner instead.");
-      setCameraOpen(false);
-    });
+    let cancelled = false;
+    let reader = null;
+    let running = false;
+
+    const onDecoded = (text) => {
+      const now = Date.now();
+      if (text === lastDecoded.current.text && now - lastDecoded.current.at < 2000) return;
+      lastDecoded.current = { text, at: now };
+      if (addSerialRef.current(text, "CAMERA")) beep();
+    };
+
+    // Picks up focus / torch / zoom of the running camera track.
+    const setupTrack = async () => {
+      const video = document.querySelector(`#${READER_ID} video`);
+      const track = video?.srcObject?.getVideoTracks?.()[0];
+      if (!track) return;
+      trackRef.current = track;
+      const caps = track.getCapabilities?.() || {};
+      try {
+        if (caps.focusMode?.includes?.("continuous")) await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+      } catch { /* focus control is optional */ }
+      const zoom = caps.zoom ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 5), step: caps.zoom.step || 0.1 } : null;
+      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom, zoomValue: zoom ? Math.max(zoom.min, 1) : 1 });
+    };
+
+    const attempts = [
+      // 1) back camera, HD video (small / dense barcodes need the resolution), fast scanning
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, qrbox, disableFlip: true, videoConstraints: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } } }),
+      // 2) plain back camera (some phones reject the HD request)
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 10, qrbox } }),
+      // 3) any camera
+      () => ({ camera: { facingMode: "user" }, config: { fps: 10, qrbox } }),
+    ];
+
+    const run = async () => {
+      let lastError = null;
+      for (const make of attempts) {
+        if (cancelled) return;
+        const { camera, config } = make();
+        try {
+          reader = new Html5Qrcode(READER_ID, readerConfig);
+          await reader.start(camera, config, onDecoded, () => {});
+          running = true;
+          if (cancelled) { await reader.stop().catch(() => {}); reader.clear?.(); return; }
+          await setupTrack();
+          return;
+        } catch (err) {
+          lastError = err;
+          try { await reader?.stop(); } catch { /* not running */ }
+          try { reader?.clear?.(); } catch { /* ignore */ }
+          reader = null;
+          // permission / secure-context problems will not be fixed by another attempt
+          if (/NotAllowed|Permission/i.test(err?.name || String(err))) break;
+        }
+      }
+      if (!cancelled) {
+        toast.error(cameraErrorMessage(lastError));
+        setCameraOpen(false);
+      }
+    };
+    run();
+
     return () => {
-      started.then(() => reader.stop()).then(() => reader.clear()).catch(() => {});
+      cancelled = true;
+      trackRef.current = null;
+      setCamTools({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
+      if (reader && running) {
+        reader.stop().then(() => reader.clear?.()).catch(() => {});
+      }
     };
   }, [cameraOpen]);
+
+  const toggleTorch = async () => {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = !camTools.torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setCamTools((t) => ({ ...t, torchOn: next }));
+    } catch { toast.info("Flash is not available on this camera."); }
+  };
+
+  const changeZoom = async (value) => {
+    const track = trackRef.current;
+    setCamTools((t) => ({ ...t, zoomValue: value }));
+    try { await track?.applyConstraints({ advanced: [{ zoom: value }] }); } catch { /* zoom is optional */ }
+  };
 
   useEffect(() => {
     if (cameraOpen && allDone) {
@@ -303,8 +388,8 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   );
 
   const camera = cameraOpen && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-3">
+      <div className="max-h-[94vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-xl">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Scan serial number</h3>
@@ -312,8 +397,21 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
-        <div id={READER_ID} className="overflow-hidden rounded-lg bg-black" />
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Point the camera at the barcode / QR code."}</p>
+        <div id={READER_ID} className="w-full overflow-hidden rounded-lg bg-black [&_video]:!w-full [&_video]:object-cover" />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {camTools.torch && (
+            <button type="button" onClick={toggleTorch} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
+              {camTools.torchOn ? <Zap size={14} /> : <ZapOff size={14} />}Flash
+            </button>
+          )}
+        </div>
+        {camTools.zoom && (
+          <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
+            Zoom
+            <input type="range" min={camTools.zoom.min} max={camTools.zoom.max} step={camTools.zoom.step} value={camTools.zoomValue} onChange={(e) => changeZoom(Number(e.target.value))} className="flex-1" />
+          </label>
+        )}
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Hold the phone 15-25 cm away, keep the barcode flat inside the box. Use Flash / Zoom if it does not read."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>
