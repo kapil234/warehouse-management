@@ -459,7 +459,7 @@ export default function OutwardDispatch() {
                 <tbody>
                   {items.map((item, index) => (
                     <Fragment key={item.id || index}>
-                    <tr className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-xs last:border-0 sm:text-sm`}>
+                    <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-xs last:border-0 sm:text-sm ${serial.rowProps(index).className}`}>
                       <td className="px-1.5 py-2 sm:px-3">{index + 1}</td>
                       <td className="px-1.5 py-2 sm:px-3">{item.category || "-"}</td>
                       <td className="whitespace-nowrap px-1.5 py-2 font-medium sm:px-3">{item.sku || "-"}</td>
@@ -486,7 +486,7 @@ export default function OutwardDispatch() {
                 </tbody>
               </table>
             </div>
-            {serial.hasSerials && <p className="mt-2 text-xs text-gray-500">Type the serial no. and press Enter or Add, tap Scan to use the camera, or just scan with a connected Bluetooth / Wi-Fi / USB scanner. Each serial no. is listed under its item.</p>}
+            {serial.hasSerials && <p className="mt-2 text-xs text-gray-500">Tap an item row to select it, then type the serial no. and press Enter / Add, tap Scan for the camera, or scan with a connected Bluetooth / Wi-Fi / USB scanner. Scans go only to the selected item and are listed under it.</p>}
           </section>
 
           {serial.camera}

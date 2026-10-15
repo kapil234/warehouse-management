@@ -229,7 +229,8 @@ export default function OutwardDetail() {
   // The documents section is always on the detail page (empty state when nothing is uploaded).
   // Sales / Account get it once dispatched; the admin from dispatch details onwards; the warehouse manager always.
   // Sales / Account only see their own part, never the documents or dispatch details.
-  const showDocuments = docsStage && (isSuperAdmin || isWarehouse) && (!isWarehouse || dispatchOpen);
+  // Hidden until the entry is dispatched (before that there are no dispatch documents to show).
+  const showDocuments = dispatched && docsStage && (isSuperAdmin || isWarehouse) && (!isWarehouse || dispatchOpen);
   const showDispatchInfo = (isWarehouse && dispatchOpen) || (isSuperAdmin && dispatched);
   const received = isReceived(outward);
   const statusStyle = getStatusStyle(outward);

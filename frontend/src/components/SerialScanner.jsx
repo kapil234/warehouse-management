@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ImageUp, Plus, X, Zap, ZapOff } from "lucide-react";
+import { Camera, CheckCircle2, Plus, X, Zap, ZapOff } from "lucide-react";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { toast } from "react-toastify";
 import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../features/outward/serialHelpers";
@@ -20,7 +20,6 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../featu
  */
 
 const READER_ID = "serial-camera-reader";
-const FILE_READER_ID = "serial-file-reader";
 
 // Product labels carry dense 1D barcodes (Code 128). Telling the reader which formats to look for makes it
 // faster and far more reliable than trying every format on every frame.
@@ -39,12 +38,7 @@ const FORMATS = [
 ];
 const READER_OPTIONS = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, verbose: false };
 
-// The scan box is the part of the picture that is read. A long barcode needs a WIDE box (almost the full width of the
-// camera view); the old fixed 300 px box cut a long barcode in half, so it could never be read.
-const qrbox = (viewW, viewH) => ({
-  width: Math.max(150, Math.floor(viewW * 0.94)),
-  height: Math.max(80, Math.min(180, Math.floor(viewH * 0.5))),
-});
+// No scan box: the WHOLE camera picture is read, so a barcode is picked up the moment it is in view (no aligning).
 
 const cameraErrorMessage = (err) => {
   const name = err?.name || String(err || "");
@@ -88,7 +82,9 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const inputRefs = useRef({}); // rowIndex -> input element
   const keyStats = useRef({ start: 0, last: 0, count: 0 });
   const lastDecoded = useRef({ text: "", at: 0 });
-  const activeRow = useRef(0);
+  const activeRow = useRef(null); // item that receives scans (camera / Bluetooth / Wi-Fi / USB scanner)
+  const [selected, setSelected] = useState(null);
+  const selectRow = (i) => { activeRow.current = i; setSelected(i); };
   const trackRef = useRef(null);
 
   // Rows that need serials: where their serials sit inside the line's slots (rows with the same SKU share one line).
@@ -129,7 +125,8 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     }
     const valid = R.map((r, i) => (r ? i : -1)).filter((i) => i !== -1);
     if (!valid.length) return false;
-    const at = Math.max(0, valid.indexOf(valid.includes(startRow) ? startRow : valid[0]));
+    if (startRow == null || !R[startRow]) return false;
+    const at = Math.max(0, valid.indexOf(startRow));
     const order = onlyRow ? [startRow] : [...valid.slice(at), ...valid.slice(0, at)];
     for (const i of order) {
       const row = R[i];
@@ -146,8 +143,26 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     toast.info(onlyRow ? "All serial numbers of this item are already added." : "All serial numbers are already added.");
     return false;
   };
-  const addSerialRef = useRef(addSerial);
-  addSerialRef.current = addSerial;
+  /**
+   * Camera and Bluetooth / Wi-Fi / USB scanner: the serial goes ONLY to the item that is selected (tap its row or its
+   * Scan button), never on to another item - so scans can never get mixed up between items.
+   */
+  const addToSelected = (text, source) => {
+    const { rows: R } = live.current;
+    const valid = R.map((r, i) => (r ? i : -1)).filter((i) => i !== -1);
+    let target = activeRow.current;
+    if (target == null || !R[target]) {
+      if (valid.length !== 1) {
+        toast.warn("Select an item first (tap its row) so the serial goes to the right item.");
+        return false;
+      }
+      target = valid[0];
+      selectRow(target);
+    }
+    return addSerial(text, source, target, true);
+  };
+  const addToSelectedRef = useRef(addToSelected);
+  addToSelectedRef.current = addToSelected;
 
   const removeSerial = (row, i) => {
     const slots = [...(values[row.key] || [])];
@@ -197,7 +212,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
         if (buffer.length >= SCAN_MIN_LENGTH && gap <= SCAN_MAX_GAP_MS) {
           e.preventDefault(); // do not "click" a focused button
           e.stopPropagation();
-          addSerialRef.current(buffer, "SCANNER");
+          addToSelectedRef.current(buffer, "SCANNER");
         }
         buffer = "";
         return;
@@ -216,8 +231,12 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     if (disabled || !lines.length) return undefined;
     const t = setTimeout(() => {
       if (document.activeElement && document.activeElement !== document.body) return;
-      const i = rows.findIndex((r) => r && rowFilled(r) < r.quantity);
-      if (i !== -1) inputRefs.current[i]?.focus({ preventScroll: true });
+      // Only when there is a single item to scan for; with several items the person picks the item first.
+      const needing = rows.map((r, i) => (r ? i : -1)).filter((i) => i !== -1);
+      if (needing.length === 1 && rowFilled(rows[needing[0]]) < rows[needing[0]].quantity) {
+        selectRow(needing[0]);
+        inputRefs.current[needing[0]]?.focus({ preventScroll: true });
+      }
     }, 50);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -234,7 +253,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       const now = Date.now();
       if (text === lastDecoded.current.text && now - lastDecoded.current.at < 2000) return;
       lastDecoded.current = { text, at: now };
-      if (addSerialRef.current(text, "CAMERA")) beep();
+      if (addToSelectedRef.current(text, "CAMERA")) beep();
     };
 
     // Picks up focus / torch / zoom of the running camera track.
@@ -252,15 +271,15 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     };
 
     const attempts = [
-      // 1) HD picture: a dense barcode needs the detail (the default 640x480 picture is too blurry to read it)
+      // 1) HD picture of the whole view: a dense barcode needs the detail
       () => ({
         camera: { facingMode: "environment" },
-        config: { fps: 15, qrbox, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
+        config: { fps: 20, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
       }),
       // 2) back camera with the device's default picture size
-      () => ({ camera: { facingMode: "environment" }, config: { fps: 10, qrbox, disableFlip: true } }),
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, disableFlip: true } }),
       // 3) any camera (some devices / laptops have no back camera)
-      () => ({ camera: { facingMode: "user" }, config: { fps: 10, qrbox, disableFlip: true } }),
+      () => ({ camera: { facingMode: "user" }, config: { fps: 15, disableFlip: true } }),
     ];
 
     const run = async () => {
@@ -317,34 +336,17 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     try { await track?.applyConstraints({ advanced: [{ zoom: value }] }); } catch { /* zoom is optional */ }
   };
 
-  // Fallback: take / pick a photo of the label and read the barcode from that picture (full camera quality).
-  const scanPhoto = async (file) => {
-    if (!file) return;
-    const toastId = toast.loading("Reading barcode...");
-    const fileReader = new Html5Qrcode(FILE_READER_ID, READER_OPTIONS);
-    try {
-      const text = await fileReader.scanFile(file, false);
-      toast.dismiss(toastId);
-      if (text) {
-        if (addSerialRef.current(text, "CAMERA")) beep();
-      }
-    } catch {
-      toast.dismiss(toastId);
-      toast.error("Could not read a barcode from that photo. Get closer, keep the barcode flat and well lit, then try again.");
-    } finally {
-      try { fileReader.clear(); } catch { /* ignore */ }
-    }
-  };
-
+  const selectedRowInfo = selected != null ? rows[selected] : null;
+  const selectedDone = Boolean(selectedRowInfo) && rowFilled(selectedRowInfo) >= selectedRowInfo.quantity;
   useEffect(() => {
-    if (cameraOpen && allDone) {
+    if (cameraOpen && selectedDone) {
       setCameraOpen(false);
-      toast.success("All serial numbers scanned.");
+      toast.success("All serial numbers of this item are scanned.");
     }
-  }, [cameraOpen, allDone]);
+  }, [cameraOpen, selectedDone]);
 
   const openCamera = (rowIndex) => {
-    activeRow.current = rowIndex;
+    selectRow(rowIndex);
     lastDecoded.current = { text: "", at: 0 };
     setLastScan("");
     setCameraOpen(true);
@@ -360,7 +362,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     }
     if (disabled) return <span className="text-xs text-gray-400">-</span>;
     return (
-      <div className={`flex items-center ${mobile ? "w-full gap-1.5 py-0" : "min-w-[330px] gap-2 py-1"}`}>
+      <div className={`flex items-center ${mobile ? "w-full gap-1.5 py-0" : "min-w-[330px] gap-2 py-1"} ${selected === rowIndex ? "rounded-lg bg-blue-50 p-1 ring-1 ring-blue-300" : ""}`}>
         <input
           ref={(el) => { inputRefs.current[rowIndex] = el; }}
           value={drafts[rowIndex] || ""}
@@ -368,7 +370,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           autoCapitalize="characters"
           spellCheck={false}
           placeholder="SR. No"
-          onFocus={() => { activeRow.current = rowIndex; }}
+          onFocus={() => selectRow(rowIndex)}
           onChange={(e) => setDrafts((d) => ({ ...d, [rowIndex]: cleanSerialInput(e.target.value) }))}
           onKeyDown={(e) => handleKeyDown(e, rowIndex)}
           className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:ring-2 focus:ring-blue-500 ${mobile ? "px-2 py-1 text-xs" : "px-3 py-2 text-sm"}`}
@@ -433,22 +435,17 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
         <div className="mb-3 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Scan serial number</h3>
-            <p className="text-xs text-gray-500">{filled} / {total} added</p>
+            <p className="text-xs text-gray-500">{selectedRowInfo ? `${items[selected]?.sku || "Item"}: ${rowFilled(selectedRowInfo)} / ${selectedRowInfo.quantity} added` : `${filled} / ${total} added`}</p>
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
         <div id={READER_ID} className="overflow-hidden rounded-lg bg-black" />
-        <div id={FILE_READER_ID} className="hidden" />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {camTools.torch && (
             <button type="button" onClick={toggleTorch} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
               {camTools.torchOn ? <Zap size={14} /> : <ZapOff size={14} />}Flash
             </button>
           )}
-          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50">
-            <ImageUp size={14} />Take photo
-            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { scanPhoto(e.target.files?.[0]); e.target.value = ""; }} />
-          </label>
         </div>
         {camTools.zoom && (
           <label className="mt-3 flex items-center gap-2 text-xs text-gray-600">
@@ -456,11 +453,18 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             <input type="range" min={camTools.zoom.min} max={camTools.zoom.max} step={camTools.zoom.step} value={camTools.zoomValue} onChange={(e) => changeZoom(Number(e.target.value))} className="flex-1" />
           </label>
         )}
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Keep the whole barcode inside the box, 15-25 cm away and flat. If it does not read, use Flash / Zoom, or tap Take photo."}</p>
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Point the camera at the barcode - it reads as soon as it is in view. Keep it flat and well lit; use Flash / Zoom if needed."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>
   );
 
-  return { inputCell, mobileInputRow, listRow, badge, camera, hasSerials: lines.length > 0 };
+  /** Props for the item's main <tr>: tap the row to make it the item that scanners write to. */
+  const rowProps = (rowIndex) => ({
+    onClick: () => { if (rows[rowIndex]) selectRow(rowIndex); },
+    className: rows[rowIndex] ? `cursor-pointer ${selected === rowIndex ? "bg-blue-50/70" : "hover:bg-gray-50"}` : "",
+    "aria-selected": selected === rowIndex,
+  });
+
+  return { inputCell, mobileInputRow, listRow, rowProps, badge, camera, selected, hasSerials: lines.length > 0 };
 }
