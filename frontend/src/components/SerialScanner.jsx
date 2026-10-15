@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, Plus, X, Zap, ZapOff } from "lucide-react";
-import { Html5Qrcode, Html5QrcodeSupportedFormats as F } from "html5-qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 import { toast } from "react-toastify";
 import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../features/outward/serialHelpers";
 
@@ -21,12 +21,8 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../featu
 
 const READER_ID = "serial-camera-reader";
 
-// Only the formats that serial labels really use. Fewer formats = faster and more accurate decoding on phones.
-const FORMATS = [F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.QR_CODE, F.DATA_MATRIX, F.PDF_417, F.AZTEC].filter((f) => f !== undefined);
-// Use the phone's own (native, much better) barcode detector when the browser has one.
-const readerConfig = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, experimentalFeatures: { useBarCodeDetectorIfSupported: true }, verbose: false };
-// Wide scan area (barcodes are long and thin) that always fits inside the preview.
-const qrbox = (w, h) => ({ width: Math.max(120, Math.floor(w * 0.92)), height: Math.max(100, Math.floor(Math.min(h * 0.7, 280))) });
+// Rectangle scan box (barcodes are long and thin) - same shape as the original scanner, shrinks only on very narrow screens.
+const qrbox = (w) => ({ width: Math.max(150, Math.min(300, Math.floor(w - 24))), height: 120 });
 
 const cameraErrorMessage = (err) => {
   const name = err?.name || String(err || "");
@@ -234,11 +230,9 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     };
 
     const attempts = [
-      // 1) back camera, HD video (small / dense barcodes need the resolution), fast scanning
-      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, qrbox, disableFlip: true, videoConstraints: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } } }),
-      // 2) plain back camera (some phones reject the HD request)
+      // same settings as the original scanner
       () => ({ camera: { facingMode: "environment" }, config: { fps: 10, qrbox } }),
-      // 3) any camera
+      // any camera (some devices / laptops have no back camera)
       () => ({ camera: { facingMode: "user" }, config: { fps: 10, qrbox } }),
     ];
 
@@ -248,7 +242,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
         if (cancelled) return;
         const { camera, config } = make();
         try {
-          reader = new Html5Qrcode(READER_ID, readerConfig);
+          reader = new Html5Qrcode(READER_ID);
           await reader.start(camera, config, onDecoded, () => {});
           running = true;
           if (cancelled) { await reader.stop().catch(() => {}); reader.clear?.(); return; }
@@ -397,7 +391,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
-        <div id={READER_ID} className="w-full overflow-hidden rounded-lg bg-black [&_video]:!w-full [&_video]:object-cover" />
+        <div id={READER_ID} className="overflow-hidden rounded-lg bg-black" />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {camTools.torch && (
             <button type="button" onClick={toggleTorch} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
