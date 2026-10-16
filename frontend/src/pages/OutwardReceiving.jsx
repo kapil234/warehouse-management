@@ -32,7 +32,7 @@ import OutwardDocuments from "../components/OutwardDocuments";
  * =========================================================
  */
 
-const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
+const PHONE_RE = /^\d{10}$/;
 
 const toDateInput = (value) => {
   const d = value ? new Date(value) : new Date();
@@ -105,7 +105,7 @@ export default function OutwardReceiving() {
     if (minDate && receivedDate < minDate) return toast.error("Receiving date cannot be before the dispatch date.");
     if (!receiverName.trim()) return toast.error("Please enter the receiver name.");
     if (!receiverContact.trim()) return toast.error("Please enter the receiver contact number.");
-    if (!PHONE_RE.test(receiverContact.trim())) return toast.error("Please enter a valid receiver contact number.");
+    if (!PHONE_RE.test(receiverContact.trim())) return toast.error("Please enter a receiver contact number (10 digits).");
 
     const hasCopy =
       receivingDocs.some((d) => startsWithName(d.docCategory, RECEIVING_REQUIRED_DOCUMENT)) ||
@@ -205,7 +205,7 @@ export default function OutwardReceiving() {
               </div>
               <div>
                 <label className={labelCls}>Receiver contact <span className="text-red-500">*</span></label>
-                <input required type="tel" inputMode="tel" value={receiverContact} onChange={(e) => setReceiverContact(e.target.value)} placeholder="Receiver contact no." className={inputCls} />
+                <input required type="tel" inputMode="numeric" maxLength={10} value={receiverContact} onChange={(e) => setReceiverContact(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Receiver contact no." className={inputCls} />
               </div>
             </div>
           </section>

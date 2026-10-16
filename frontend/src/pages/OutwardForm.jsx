@@ -91,7 +91,7 @@ const newItem = () => ({
 
 // Account's references are Invoice / Other (Accounts); the warehouse manager's are Delivery Challan / Return Note / Other.
 const newAccountRef = () => ({ id: makeId(), refDocType: "Invoice", refDocNumber: "", ewayBillNumber: "" });
-const newManagerRef = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "", ewayBillNumber: "" });
+const newManagerRef = () => ({ id: makeId(), refDocType: "Bilty", refDocNumber: "", ewayBillNumber: "" });
 // "E-way Bill" is an Account reference type again, so nothing needs to be kept aside any more.
 const isLegacyEwayRef = () => false;
 
@@ -467,8 +467,9 @@ export default function OutwardForm() {
     if (!billToContactNo.trim()) return toast.error("Please enter Bill to contact no.");
     if (billToEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billToEmail.trim())) return toast.error("Please enter a valid Bill to email address.");
     for (const [label, value] of [["Ship to contact no.", shipToContactNo], ["Bill to contact no.", billToContactNo]]) {
-      if (value.trim() && !/^[0-9+()\-\s]{6,20}$/.test(value.trim())) return toast.error(`Please enter a valid ${label}`);
+      if (value.trim() && !/^\d{10}$/.test(value.trim())) return toast.error(`${label} must be exactly 10 digits.`);
     }
+    if (driverContact.trim() && !/^\d{10}$/.test(driverContact.trim())) return toast.error("Driver contact must be exactly 10 digits.");
 
     for (const [index, item] of items.entries()) {
       const label = `Item ${index + 1}`;
@@ -481,6 +482,7 @@ export default function OutwardForm() {
     // Payment details are shared by all items.
     if (!payment.paymentStatus) return toast.error("Please select the payment status.");
     if (payment.paymentStatus !== "COMPLETED" && !payment.approvedBy.trim()) return toast.error("Please enter Approve By.");
+    if (payment.paymentStatus !== "PENDING" && payment.utrNumber.trim() && !/^\d{12}$/.test(payment.utrNumber.trim())) return toast.error("UTR number must be exactly 12 digits.");
     if (payment.paymentStatus !== "PENDING" && !payment.utrNumber.trim() && !payment.proof) {
       // A proof saved earlier only covers items that already had one.
       const savedCovers = payment.keepProof && items.every((i) => originalItems.some((o) => o.id === i.serverId && o.hasProof));
@@ -725,7 +727,7 @@ export default function OutwardForm() {
             <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Ship to details</h3>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
               <div><label className={labelCls}>Contact person <span className="text-red-500">*</span></label><input required value={shipToContactPerson} onChange={(e) => setShipToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
-              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" inputMode="numeric" maxLength={10} value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter contact number" className={inputCls} /></div>
               <div><label className={labelCls}>Location <span className="text-red-500">*</span></label><input required value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location or paste Google Maps link" className={inputCls} /><LocationLink value={shipToLocation} short /></div>
             </div>
 
@@ -733,7 +735,7 @@ export default function OutwardForm() {
             <h3 className="mt-6 mb-3 border-t border-gray-100 pt-5 text-sm font-semibold text-gray-900">Bill to details</h3>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
               <div><label className={labelCls}>Contact person <span className="text-red-500">*</span></label><input required value={billToContactPerson} onChange={(e) => setBillToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
-              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" value={billToContactNo} onChange={(e) => setBillToContactNo(e.target.value)} placeholder="Enter contact number" className={inputCls} /></div>
+              <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" inputMode="numeric" maxLength={10} value={billToContactNo} onChange={(e) => setBillToContactNo(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter contact number" className={inputCls} /></div>
               <div><label className={labelCls}>Email</label><input type="email" value={billToEmail} onChange={(e) => setBillToEmail(e.target.value)} placeholder="Enter email" className={inputCls} /></div>
             </div>
           </section>
@@ -826,7 +828,7 @@ export default function OutwardForm() {
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className={labelCls}>UTR number</label>
-                    <input value={payment.utrNumber} onChange={(e) => setPayment((p) => ({ ...p, utrNumber: e.target.value }))} placeholder="Enter UTR number" className={inputCls} />
+                    <input inputMode="numeric" maxLength={12} value={payment.utrNumber} onChange={(e) => setPayment((p) => ({ ...p, utrNumber: e.target.value.replace(/\D/g, "").slice(0, 12) }))} placeholder="Enter 12-digit UTR number" className={inputCls} />
                   </div>
                   <div>
                     <label className={labelCls}>Payment proof (image / file)</label>
@@ -919,7 +921,7 @@ export default function OutwardForm() {
                   </div>
                   <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
                   <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
-                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="numeric" maxLength={10} value={driverContact} onChange={(e) => setDriverContact(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter driver contact no." className={inputCls} /></div>
                 </fieldset>
 
                 <div className="mt-5 flex items-center justify-between">

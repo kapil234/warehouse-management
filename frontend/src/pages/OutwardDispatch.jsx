@@ -42,8 +42,8 @@ const isSuperAdminUser = () => {
 };
 
 const makeId = () => crypto.randomUUID();
-const newReference = () => ({ id: makeId(), refDocType: "Delivery Challan", refDocNumber: "" });
-const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
+const newReference = () => ({ id: makeId(), refDocType: "Bilty", refDocNumber: "" });
+const PHONE_RE = /^\d{10}$/;
 const toLocalInput = (value) => {
   const d = value ? new Date(value) : new Date();
   if (Number.isNaN(d.getTime())) return toLocalInput();
@@ -100,7 +100,7 @@ export default function OutwardDispatch() {
       setReferences(
         saved.map((r) => ({
           ...newReference(),
-          refDocType: r.refDocType || "Delivery Challan",
+          refDocType: r.refDocType || "Bilty",
           refDocNumber: isPlaceholder(r.refDocNumber) ? "" : r.refDocNumber,
         }))
       );
@@ -197,7 +197,7 @@ export default function OutwardDispatch() {
     const fromTransport = isTransportSubmitted(outward);
     if (!fromTransport) {
       if (!dispatchMode) return toast.error("Please select the dispatch mode.");
-      if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
+      if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a driver contact number (10 digits).");
     }
 
     // Every Pcs unit needs its own serial number. Entries dispatched before serial numbers existed
@@ -372,7 +372,7 @@ export default function OutwardDispatch() {
                   </div>
                   <div><label className={labelCls}>Vehicle / AWB number</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="If applicable" className={inputCls} /></div>
                   <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
-                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="numeric" maxLength={10} value={driverContact} onChange={(e) => setDriverContact(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter driver contact no." className={inputCls} /></div>
                 </>
               )}
             </div>

@@ -154,6 +154,10 @@ export function shapeForFinance(entry) {
 }
 
 /** Returns an error message, or null when the PI (proforma invoice) fields are valid. */
+// Contact numbers are exactly 10 digits; a UTR number is exactly 12 digits.
+export const PHONE_RE = /^\d{10}$/;
+export const UTR_RE = /^\d{12}$/;
+
 export function validatePi(data) {
   if (!String(data.piNumber || "").trim()) return "PI number is required";
   if (!data.piDate || Number.isNaN(new Date(data.piDate).getTime())) return "PI date is required";
@@ -174,7 +178,7 @@ export function validateParty(data) {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Bill to email is not a valid email address";
   for (const [key, label] of [["shipToContactNo", "Ship to contact no."], ["billToContactNo", "Bill to contact no."]]) {
     const v = String(data[key] || "").trim();
-    if (v && !/^[0-9+()\-\s]{6,20}$/.test(v)) return `${label} is not valid`;
+    if (v && !PHONE_RE.test(v)) return `${label} must be exactly 10 digits`;
   }
   return null;
 }
@@ -215,7 +219,9 @@ export function validateItemPayment(item, label) {
     return `${label}: Approve By is required when payment status is ${item.paymentStatus === "PENDING" ? "Pending" : "Partially Completed"}`;
   }
   if (item.paymentStatus !== "PENDING") {
-    const hasUtr = Boolean(String(item.utrNumber || "").trim());
+    const utr = String(item.utrNumber || "").trim();
+    if (utr && !UTR_RE.test(utr)) return `${label}: UTR number must be exactly 12 digits`;
+    const hasUtr = Boolean(utr);
     const hasProof = Boolean(item.proofFileKey) || item.keepProof === true;
     if (!hasUtr && !hasProof) {
       return `${label}: UTR number or a payment proof (image / file) is required when payment status is ${
@@ -332,12 +338,12 @@ export function ewayBillProblem({ piAmount, documents = [] }) {
 }
 
 
-const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
+
 
 /** Driver name / contact are optional, but a contact must look like a phone number when given. */
 export function validateDriver(data) {
   const contact = String(data.driverContact || "").trim();
-  if (contact && !PHONE_RE.test(contact)) return "Driver contact is not valid";
+  if (contact && !PHONE_RE.test(contact)) return "Driver contact must be exactly 10 digits";
   return null;
 }
 
@@ -347,7 +353,7 @@ export function validateReceiving(data, dispatchedAt) {
   if (!name) return "Receiver name is required";
   const contact = String(data.receiverContact || "").trim();
   if (!contact) return "Receiver contact is required";
-  if (!PHONE_RE.test(contact)) return "Receiver contact is not valid";
+  if (!PHONE_RE.test(contact)) return "Receiver contact must be exactly 10 digits";
   const date = data.receivedDate ? new Date(data.receivedDate) : null;
   if (!date || Number.isNaN(date.getTime())) return "Receiving date is required";
   const endOfToday = new Date();
@@ -392,12 +398,12 @@ export function validateTransport(data) {
     if (!has("vehicleNumber")) return "Vehicle number is required";
     if (!has("driverName")) return "Driver name is required";
     if (!has("driverContact")) return "Driver contact is required";
-    if (!PHONE_RE.test(String(data.driverContact).trim())) return "Driver contact is not valid";
+    if (!PHONE_RE.test(String(data.driverContact).trim())) return "Driver contact must be exactly 10 digits";
   } else {
     if (!has("transporterId")) return "Transporter ID is required";
     if (!has("transporterName")) return "Transporter name is required";
     if (!has("transporterContact")) return "Transporter contact is required";
-    if (!PHONE_RE.test(String(data.transporterContact).trim())) return "Transporter contact is not valid";
+    if (!PHONE_RE.test(String(data.transporterContact).trim())) return "Transporter contact must be exactly 10 digits";
   }
   return null;
 }

@@ -27,7 +27,7 @@ import { TRANSPORT_MODES, DISPATCH_MODES, isTransportSubmitted } from "../featur
  * =========================================================
  */
 
-const PHONE_RE = /^[0-9+()\-\s]{6,20}$/;
+const PHONE_RE = /^\d{10}$/;
 
 export default function OutwardTransportation() {
   const navigate = useNavigate();
@@ -89,12 +89,12 @@ export default function OutwardTransportation() {
       if (!vehicleNumber.trim()) return toast.error("Please enter the vehicle number.");
       if (!driverName.trim()) return toast.error("Please enter the driver name.");
       if (!driverContact.trim()) return toast.error("Please enter the driver contact number.");
-      if (!PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a valid driver contact number.");
+      if (!PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a driver contact number (10 digits).");
     } else {
       if (!transporterId.trim()) return toast.error("Please enter the transporter ID.");
       if (!transporterName.trim()) return toast.error("Please enter the transporter name.");
       if (!transporterContact.trim()) return toast.error("Please enter the transporter contact number.");
-      if (!PHONE_RE.test(transporterContact.trim())) return toast.error("Please enter a valid transporter contact number.");
+      if (!PHONE_RE.test(transporterContact.trim())) return toast.error("Please enter a transporter contact number (10 digits).");
     }
 
     setSaving(true);
@@ -184,7 +184,7 @@ export default function OutwardTransportation() {
                 <>
                   <div><label className={labelCls}>Vehicle no.</label><input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} placeholder="e.g. DL01AB1234" className={inputCls} /></div>
                   <div><label className={labelCls}>Driver name</label><input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Enter driver name" className={inputCls} /></div>
-                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="tel" value={driverContact} onChange={(e) => setDriverContact(e.target.value)} placeholder="Enter driver contact no." className={inputCls} /></div>
+                  <div><label className={labelCls}>Driver contact</label><input type="tel" inputMode="numeric" maxLength={10} value={driverContact} onChange={(e) => setDriverContact(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter driver contact no." className={inputCls} /></div>
                 </>
               )}
 
@@ -192,7 +192,7 @@ export default function OutwardTransportation() {
                 <>
                   <div><label className={labelCls}>Transporter ID</label><input value={transporterId} onChange={(e) => setTransporterId(e.target.value)} placeholder="Enter transporter ID" className={inputCls} /></div>
                   <div><label className={labelCls}>Transporter name</label><input value={transporterName} onChange={(e) => setTransporterName(e.target.value)} placeholder="Enter transporter name" className={inputCls} /></div>
-                  <div><label className={labelCls}>Transporter contact</label><input type="tel" inputMode="tel" value={transporterContact} onChange={(e) => setTransporterContact(e.target.value)} placeholder="Enter transporter contact no." className={inputCls} /></div>
+                  <div><label className={labelCls}>Transporter contact</label><input type="tel" inputMode="numeric" maxLength={10} value={transporterContact} onChange={(e) => setTransporterContact(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter transporter contact no." className={inputCls} /></div>
                 </>
               )}
             </div>
