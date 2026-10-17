@@ -385,7 +385,6 @@ export default function Outward() {
 
   // KPI cards use the unfiltered entries, so searching only changes the list below.
   const summary = useSummaryEntries("/api/outward", scopedWarehouseId, waitingForWarehouse);
-  const summaryData = useMemo(() => summary.entries.map(formatOutwardEntry), [summary.entries]);
 
   // Search / type / date are now applied server-side (see queryParams above).
   // "Pending docs" only filters within the page currently on screen.
@@ -399,18 +398,12 @@ export default function Outward() {
     return groups;
   }, {});
 
-  const totalEntries = summary.total;
-  // These three read off the current page only - a full across-all-pages
-  // figure would need its own aggregate endpoint.
-  const documentsPending = summaryData.reduce((total, item) => total + (Number(item.pendingDocuments) || 0), 0);
-  const awaitingApproval = summaryData.filter((item) => item.workflowStatus === "PENDING_APPROVAL").length;
+  const totalEntries = summary.data?.total ?? 0;
+  const documentsPending = summary.data?.documentsPending ?? 0;
+  const awaitingApproval = summary.data?.pendingApproval ?? 0;
   // Approved but not dispatched yet = every step between approval and dispatch.
-  const awaitingDispatch = summaryData.filter((item) =>
-    item.workflowStatus ? ["PENDING_DISPATCH", "TRANSPORT_PENDING", "DOCS_PENDING", "READY_FOR_DISPATCH"].includes(item.workflowStatus) : item.dispatchState === "Pending"
-  ).length;
-  const dispatchedCount = summaryData.filter((item) =>
-    item.workflowStatus ? ["DISPATCHED", "DELIVERED"].includes(item.workflowStatus) : item.dispatchState === "Dispatched"
-  ).length;
+  const awaitingDispatch = summary.data?.awaitingDispatch ?? 0;
+  const dispatchedCount = summary.data?.dispatched ?? 0;
 
   const goToPage = (next) => {
     const clamped = Math.min(Math.max(next, 1), pagination.totalPages || 1);

@@ -171,6 +171,8 @@ model Grn {
 
   @@index([warehouseId])
   @@index([createdById])
+  // list page: newest first inside a warehouse
+  @@index([warehouseId, createdAt])
 }
 
 model GrnItem {
@@ -188,6 +190,8 @@ model GrnItem {
 
   @@index([grnId])
   @@index([category, companyName])
+  // stock totals + SKU search
+  @@index([category, sku])
 }
 
 model GrnReferenceDocument {
@@ -288,6 +292,11 @@ model Min {
 
   @@index([warehouseId])
   @@index([createdById])
+  // list page + KPI counts: newest first / by status inside a warehouse
+  @@index([warehouseId, createdAt])
+  @@index([warehouseId, status, createdAt])
+  // customer dropdown
+  @@index([warehouseId, customerName])
 }
 
 model MinItem {
@@ -313,6 +322,8 @@ model MinItem {
 
   @@index([minId])
   @@index([category, companyName])
+  // stock totals + SKU search
+  @@index([category, sku])
 }
 
 model MinReferenceDocument {

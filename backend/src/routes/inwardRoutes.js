@@ -2,6 +2,7 @@ import express from "express";
 
 import {
   listGrn,
+  getGrnSummary,
   getGrnById,
   createGrn,
   updateGrn,
@@ -53,6 +54,9 @@ router.get(
 // =====================================================
 // GET ONE GRN
 // =====================================================
+
+// KPI cards of the list page. Must stay above "/:id".
+router.get("/summary", getGrnSummary);
 
 router.get(
   "/models",

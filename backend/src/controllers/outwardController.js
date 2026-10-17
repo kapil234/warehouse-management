@@ -62,7 +62,7 @@ import {
 const DEFAULT_DOCUMENT_TYPES = ["Delivery challan", "Dispatch photo"];
 
 // Create / edit run the stock check and the save in one serializable transaction.
-const STOCK_TRANSACTION_OPTIONS = { isolationLevel: "Serializable", maxWait: 10000, timeout: 30000 };
+const STOCK_TRANSACTION_OPTIONS = { isolationLevel: "Serializable", maxWait: 10000, timeout: 10000 };
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -271,6 +271,57 @@ export async function listOutward(req, res) {
   } catch (error) {
     console.error("List outward error:", error);
     return res.status(500).json({ message: "Failed to fetch outward entries", error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SUMMARY (KPI cards of the list page)
+// ---------------------------------------------------------------------------
+// The page used to download the 100 newest FULL entries just to count them. This
+// answers with a grouped count plus (warehouse role only) the ids/categories of
+// the newest 100 documents.
+export async function getOutwardSummary(req, res) {
+  try {
+    const { warehouseId } = req.query;
+    const scopedWarehouseIds = await getScopedWarehouseIds(req);
+    const where = {
+      AND: [
+        scopedWarehouseIds ? { warehouseId: { in: scopedWarehouseIds } } : {},
+        warehouseId ? { warehouseId } : {},
+        roleWhere(req),
+      ],
+    };
+
+    const isWarehouse = req.user.role === "WAREHOUSE_MANAGER";
+    const [groups, latest] = await Promise.all([
+      prisma.min.groupBy({ by: ["status"], where, _count: { _all: true } }),
+      isWarehouse
+        ? prisma.min.findMany({ where, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 })
+        : Promise.resolve([]),
+    ]);
+
+    let total = 0, pendingApproval = 0, awaitingDispatch = 0, dispatched = 0;
+    for (const g of groups) {
+      const n = g._count._all;
+      total += n;
+      if (g.status === STATUS.PENDING_APPROVAL) pendingApproval += n;
+      if (APPROVED_STATUSES.includes(g.status)) awaitingDispatch += n;
+      if (DISPATCHED_STATUSES.includes(g.status)) dispatched += n;
+    }
+
+    let documentsPending = 0;
+    if (isWarehouse && latest.length) {
+      const ids = latest.map((x) => x.id);
+      const docs = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: { in: ids } }, select: { linkedId: true, docCategory: true } });
+      const byEntry = new Map(ids.map((id) => [id, []]));
+      for (const d of docs) byEntry.get(d.linkedId)?.push(d);
+      for (const list of byEntry.values()) documentsPending += documentStatus(documentsForWarehouse(list)).pendingDocuments;
+    }
+
+    return res.json({ data: { total, pendingApproval, awaitingDispatch, dispatched, documentsPending } });
+  } catch (error) {
+    console.error("Outward summary error:", error);
+    return res.status(500).json({ message: "Failed to fetch summary", error: error.message });
   }
 }
 

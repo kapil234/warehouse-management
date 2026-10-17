@@ -536,9 +536,14 @@ export default function Inward() {
     [rawList]
   );
 
-  // KPI cards use the unfiltered entries, so searching only changes the list below.
-  const summary = useSummaryEntries("/api/grn", scopedWarehouseId, waitingForWarehouse);
-  const summaryData = useMemo(() => summary.entries.map(formatGrn), [summary.entries]);
+  // KPI cards use the unfiltered totals, so searching only changes the list below.
+  // "Today" starts at local midnight (the server may be in another time zone).
+  const todayFrom = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }, []);
+  const summary = useSummaryEntries("/api/grn", scopedWarehouseId, waitingForWarehouse, { todayFrom });
 
   // Search / type / date are now applied server-side (see queryParams above).
   // "Pending docs" only filters within the page currently on screen - it
@@ -560,26 +565,10 @@ export default function Inward() {
     {}
   );
 
-  const totalEntries = summary.total;
-
-  // These three read off the current page only (same as before pagination was
-  // wired up for real) - a full across-all-pages figure would need its own
-  // aggregate endpoint.
-  const todaysInward = summaryData.filter(
-    (item) => item.date === "Today"
-  ).length;
-
-  const documentsPending =
-    summaryData.reduce(
-      (total, item) =>
-        total +
-        (Number(item.pendingDocuments) || 0),
-      0
-    );
-
-  const completed = summaryData.filter(
-    (item) => item.statusType === "complete"
-  ).length;
+  const totalEntries = summary.data?.total ?? 0;
+  const todaysInward = summary.data?.todaysInward ?? 0;
+  const documentsPending = summary.data?.documentsPending ?? 0;
+  const completed = summary.data?.completed ?? 0;
 
   const goToPage = (next) => {
     const clamped = Math.min(

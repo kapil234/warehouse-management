@@ -1,5 +1,6 @@
 import { isAnyOf } from "@reduxjs/toolkit";
 import { loginUser, logout, sessionExpired } from "../auth/authSlice";
+import { clearSummaryCache } from "./useSummaryEntries";
 
 // =====================================================
 // LOAD ONCE, RELOAD ONLY WHEN SOMETHING CHANGES
@@ -49,6 +50,8 @@ export const markFailed = (state) => {
 
 export const bumpVersion = (state) => {
   state.dataVersion += 1;
+  // KPI card numbers are cached for a minute - anything saved makes them stale.
+  clearSummaryCache();
 };
 
 // Used as the `condition` of a fetch thunk: returning false skips the request.

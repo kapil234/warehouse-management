@@ -425,6 +425,60 @@ export async function listGrn(req, res) {
   }
 }
  
+/** GET /api/grn/summary - KPI card numbers without downloading full entries. */
+export async function getGrnSummary(req, res) {
+  try {
+    const { warehouseId, todayFrom } = req.query;
+
+    let scopedWarehouseIds = null;
+    if (req.user.role === "WAREHOUSE_MANAGER") {
+      const grants = await prisma.warehouseAccess.findMany({
+        where: { userId: req.user.id, accessLevel: "MANAGE" },
+        select: { warehouseId: true },
+      });
+      scopedWarehouseIds = grants.map((g) => g.warehouseId);
+    } else if (isFinanceSide(req.user.role)) {
+      scopedWarehouseIds = await getFinanceWarehouseIds(req.user);
+    }
+
+    const where = {
+      AND: [
+        scopedWarehouseIds ? { warehouseId: { in: scopedWarehouseIds } } : {},
+        warehouseId ? { warehouseId } : {},
+      ],
+    };
+
+    const todayDate = todayFrom ? new Date(todayFrom) : null;
+    const validToday = todayDate && !Number.isNaN(todayDate.getTime());
+    const [total, todays, latest] = await Promise.all([
+      prisma.grn.count({ where }),
+      validToday ? prisma.grn.count({ where: { AND: [where, { createdAt: { gte: todayDate } }] } }) : Promise.resolve(0),
+      // Same sample the cards always used: the 100 newest entries - but only their ids.
+      prisma.grn.findMany({ where, select: { id: true }, orderBy: { createdAt: "desc" }, take: 100 }),
+    ]);
+
+    const ids = latest.map((g) => g.id);
+    const docs = ids.length
+      ? await prisma.document.findMany({ where: { linkedType: "grn", linkedId: { in: ids } }, select: { linkedId: true, docCategory: true } })
+      : [];
+    const byGrn = new Map(ids.map((id) => [id, []]));
+    for (const d of docs) byGrn.get(d.linkedId)?.push(d);
+
+    let documentsPending = 0;
+    let completed = 0;
+    for (const list of byGrn.values()) {
+      const s = calculateDocumentStatus(list);
+      documentsPending += s.pendingDocuments;
+      if (s.status === "Complete") completed += 1;
+    }
+
+    return res.json({ data: { total, todaysInward: todays, documentsPending, completed } });
+  } catch (error) {
+    console.error("GRN summary error:", error);
+    return res.status(500).json({ message: "Failed to fetch summary", error: error.message });
+  }
+}
+
 /**
  * =========================================================
  * GET /api/grn/:id

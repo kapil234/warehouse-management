@@ -1,6 +1,7 @@
 import express from "express";
 import {
   listOutward,
+  getOutwardSummary,
   getOutwardById,
   createOutward,
   updateOutward,
@@ -47,6 +48,8 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get("/", listOutward);
+// KPI cards of the list page. Must stay above "/:id".
+router.get("/summary", getOutwardSummary);
 router.get("/models", listOutwardModels);
 // Available stock per model - feeds the outward form dropdown. Must stay above "/:id".
 router.get("/stock", listOutwardStock);

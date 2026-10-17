@@ -8,7 +8,7 @@ const baseClient = new PrismaClient({
   // Default is maxWait 2000ms / timeout 5000ms, which a slow (remote) database
   // easily exceeds -> "Transaction already closed" (P2028). Applies to every
   // prisma.$transaction(async tx => ...) in the app.
-  transactionOptions: { maxWait: 10000, timeout: 30000 },
+  transactionOptions: { maxWait: 10000, timeout: 10000 },
 });
 
 // The remote database sometimes can't be reached for a moment (P1001) - e.g. a flaky
