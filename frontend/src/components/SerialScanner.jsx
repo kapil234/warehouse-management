@@ -52,6 +52,15 @@ function beep() {
   navigator.vibrate?.(60);
 }
 
+// CAMERA only: the WHOLE barcode text (hidden control characters and spaces removed). The scanner / typed path
+// keeps using resolveScannedSerial exactly as before.
+const cameraSerial = (raw, stock) => {
+  const whole = cleanSerialInput(String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, ""));
+  if (!whole) return "";
+  const hit = stock?.find((sn) => cleanSerialInput(sn).toLowerCase() === whole.toLowerCase());
+  return hit || whole;
+};
+
 const SOURCE_LABEL = { CAMERA: "camera", SCANNER: "scanner", MANUAL: "typed" };
 
 export default function useSerialScanner({ items = [], lines = [], values = {}, onChange, disabled = false, suggestions = null }) {
@@ -102,7 +111,10 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const { lines: L, values: V, onChange: change, rows: R, items: I, suggestions: S } = live.current;
     // A label barcode can hold "MODEL SERIAL": keep only the serial (checked against what is in stock for the item).
     const target = startRow != null ? R[startRow] : null;
-    const serialNo = resolveScannedSerial(raw, { sku: startRow != null ? I[startRow]?.sku : "", stock: target && S ? S[target.key] : null });
+    const stockForScan = target && S ? S[target.key] : null;
+    const serialNo = source === "CAMERA"
+      ? cameraSerial(raw, stockForScan)
+      : resolveScannedSerial(raw, { sku: startRow != null ? I[startRow]?.sku : "", stock: stockForScan });
     if (!serialNo) return false;
     // Dispatch: only serials that are really available (in this warehouse's stock for the item and not already dispatched
     // in another outward entry) can be added. Anything else is refused right at the scan.

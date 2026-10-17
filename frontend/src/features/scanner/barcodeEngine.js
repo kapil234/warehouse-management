@@ -21,28 +21,40 @@ import {
  * and a "Photo" fallback (decodeImageFile) that decodes a picture taken with the phone's own camera app.
  */
 
-const ZX_FORMATS = [
+// Product labels (inverters, panels, cables ...) carry Code 128 / 2D codes. These are tried FIRST on every frame.
+const STRONG_FORMATS = [
   BarcodeFormat.CODE_128,
   BarcodeFormat.CODE_39,
   BarcodeFormat.CODE_93,
-  BarcodeFormat.CODABAR,
-  BarcodeFormat.ITF,
-  BarcodeFormat.EAN_13,
-  BarcodeFormat.EAN_8,
-  BarcodeFormat.UPC_A,
-  BarcodeFormat.UPC_E,
-  BarcodeFormat.RSS_14,
-  BarcodeFormat.RSS_EXPANDED,
   BarcodeFormat.QR_CODE,
   BarcodeFormat.DATA_MATRIX,
   BarcodeFormat.AZTEC,
   BarcodeFormat.PDF_417,
+];
+// Number-only retail formats. A dense Code 128 label is often MISREAD as one of these (you then get just a
+// number), so they are tried less often and only accepted when the SAME value is read several times in a row.
+const WEAK_FORMATS = [
+  BarcodeFormat.EAN_13,
+  BarcodeFormat.EAN_8,
+  BarcodeFormat.UPC_A,
+  BarcodeFormat.UPC_E,
+  BarcodeFormat.ITF,
+  BarcodeFormat.CODABAR,
+  BarcodeFormat.RSS_14,
+  BarcodeFormat.RSS_EXPANDED,
   BarcodeFormat.MAXICODE,
 ];
+const WEAK_NAMES = new Set(["EAN_13", "EAN_8", "UPC_A", "UPC_E", "ITF", "CODABAR", "RSS_14", "RSS_EXPANDED", "MAXICODE"]);
+const WEAK_CONFIRMATIONS = 3;
 
-const HINTS = new Map();
-HINTS.set(DecodeHintType.POSSIBLE_FORMATS, ZX_FORMATS);
-HINTS.set(DecodeHintType.TRY_HARDER, true);
+const makeHints = (formats) => {
+  const hints = new Map();
+  hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
+  hints.set(DecodeHintType.TRY_HARDER, true);
+  return hints;
+};
+const HINTS_STRONG = makeHints(STRONG_FORMATS);
+const HINTS_ALL = makeHints([...STRONG_FORMATS, ...WEAK_FORMATS]);
 
 const zxingReader = new MultiFormatReader();
 
@@ -73,7 +85,7 @@ function cropToCanvas(src, sx, sy, sw, sh, { maxSide = 1800, rotate = false } = 
 }
 
 /** ZXing on one canvas: two binarizers, optionally also inverted. Returns text or null. */
-function decodeCanvas(canvas, tryInverted = false) {
+function decodeCanvas(canvas, tryInverted = false, hints = HINTS_STRONG) {
   const source = new HTMLCanvasElementLuminanceSource(canvas);
   const variants = [() => new HybridBinarizer(source), () => new GlobalHistogramBinarizer(source)];
   if (tryInverted) {
@@ -82,9 +94,9 @@ function decodeCanvas(canvas, tryInverted = false) {
   }
   for (const make of variants) {
     try {
-      const result = zxingReader.decode(new BinaryBitmap(make()), HINTS);
+      const result = zxingReader.decode(new BinaryBitmap(make()), hints);
       const text = result?.getText?.();
-      if (text) return text;
+      if (text) return { text, format: BarcodeFormat[result.getBarcodeFormat()] || "" };
     } catch { /* NotFoundException = nothing here, try the next variant */ }
   }
   return null;
@@ -92,16 +104,16 @@ function decodeCanvas(canvas, tryInverted = false) {
 
 // Views tried on every image: [x, y, w, h as fractions of the picture, rotate]
 const VIEWS = [
+  { x: 0, y: 0.25, w: 1, h: 0.5, rotate: false }, // centre band (where the scan frame is)
   { x: 0, y: 0, w: 1, h: 1, rotate: false }, // whole picture
-  { x: 0, y: 0.3, w: 1, h: 0.4, rotate: false }, // centre band (where the scan frame is)
+  { x: 0.1, y: 0.2, w: 0.8, h: 0.6, rotate: false }, // centre crop, larger bars
+  { x: 0.2, y: 0, w: 0.6, h: 1, rotate: true }, // centre column, vertical barcode
   { x: 0, y: 0, w: 1, h: 1, rotate: true }, // whole picture, vertical barcode
-  { x: 0.15, y: 0.25, w: 0.7, h: 0.5, rotate: false }, // centre crop, larger bars
-  { x: 0.25, y: 0, w: 0.5, h: 1, rotate: true }, // centre column, vertical barcode
 ];
 
 function decodeView(src, width, height, view, opts = {}) {
   const canvas = cropToCanvas(src, width * view.x, height * view.y, width * view.w, height * view.h, { rotate: view.rotate, ...opts });
-  return decodeCanvas(canvas, opts.inverted);
+  return decodeCanvas(canvas, opts.inverted, opts.hints);
 }
 
 // ---------- native BarcodeDetector ----------
@@ -126,7 +138,8 @@ async function nativeDecode(src) {
   if (!detector) return null;
   try {
     const codes = await detector.detect(src);
-    return codes?.find((c) => c.rawValue)?.rawValue || null;
+    const hit = codes?.find((c) => c.rawValue);
+    return hit ? { text: hit.rawValue, format: String(hit.format || "").toUpperCase() } : null;
   } catch {
     return null;
   }
@@ -135,7 +148,6 @@ async function nativeDecode(src) {
 // ---------- live camera ----------
 
 const CAMERA_ATTEMPTS = [
-  { video: { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 } } },
   { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
   { video: { facingMode: "environment" } },
   { video: true },
@@ -172,27 +184,39 @@ export async function startScanner({ container, onDecoded }) {
   let stopped = false;
   let tick = 0;
   let timer = null;
+  let candidate = { text: "", count: 0 };
 
+  // A strong format (Code 128, QR ...) is accepted at once. A number-only retail format must be read the same
+  // several times in a row, otherwise it is most likely a misread of a Code 128 label.
+  const accept = (hit) => {
+    if (!hit?.text) return;
+    if (!WEAK_NAMES.has(hit.format)) { candidate = { text: "", count: 0 }; onDecoded(hit.text); return; }
+    candidate = candidate.text === hit.text ? { text: hit.text, count: candidate.count + 1 } : { text: hit.text, count: 1 };
+    if (candidate.count >= WEAK_CONFIRMATIONS) { candidate = { text: "", count: 0 }; onDecoded(hit.text); }
+  };
+
+  // Light on the phone: one decode attempt per round, the next round waits at least twice as long as the last one
+  // took, so the page / video never freezes.
   const loop = async () => {
     if (stopped) return;
+    const began = performance.now();
     try {
       const w = video.videoWidth;
       const h = video.videoHeight;
       if (w && h && video.readyState >= 2) {
-        // 1) native detector (fast, full resolution)
-        let text = await nativeDecode(video);
-        // 2) ZXing, one view per tick so the phone stays responsive
-        if (!text && !stopped) {
+        let hit = await nativeDecode(video);
+        if (!hit && !stopped) {
           const view = VIEWS[tick % VIEWS.length];
-          text = decodeView(video, w, h, view, { inverted: tick % 7 === 6 });
+          const all = tick % 4 === 3; // number-only formats only every 4th round
+          hit = decodeView(video, w, h, view, { maxSide: 1280, hints: all ? HINTS_ALL : HINTS_STRONG, inverted: tick % 9 === 8 });
         }
-        if (text && !stopped) onDecoded(text);
+        if (!stopped) accept(hit);
         tick += 1;
       }
     } catch { /* a bad frame is skipped */ }
-    if (!stopped) timer = setTimeout(loop, 60);
+    if (!stopped) timer = setTimeout(loop, Math.max(120, (performance.now() - began) * 2));
   };
-  timer = setTimeout(loop, 300);
+  timer = setTimeout(loop, 400);
 
   const stop = () => {
     stopped = true;
@@ -220,17 +244,19 @@ export async function decodeImageFile(file) {
   }
   try {
     const native = await nativeDecode(bitmap);
-    if (native) return native;
+    if (native && !WEAK_NAMES.has(native.format)) return native.text;
     const { width, height } = bitmap;
-    for (const maxSide of [2400, 1400, 900]) {
+    for (const maxSide of [2000, 1300]) {
       for (const view of VIEWS) {
-        const text = decodeView(bitmap, width, height, view, { maxSide });
-        if (text) return text;
+        const hit = decodeView(bitmap, width, height, view, { maxSide, hints: HINTS_STRONG });
+        if (hit) return hit.text;
       }
     }
-    for (const view of VIEWS) {
-      const text = decodeView(bitmap, width, height, view, { maxSide: 1800, inverted: true });
-      if (text) return text;
+    // nothing strong found: a number-only code is accepted from a photo (one sharp still picture is reliable)
+    if (native) return native.text;
+    for (const view of VIEWS.slice(0, 3)) {
+      const hit = decodeView(bitmap, width, height, view, { maxSide: 1600, hints: HINTS_ALL, inverted: true });
+      if (hit) return hit.text;
     }
     return null;
   } finally {
