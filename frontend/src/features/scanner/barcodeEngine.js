@@ -113,7 +113,7 @@ const VIEWS = [
 
 function decodeView(src, width, height, view, opts = {}) {
   // the centre band is cheap (half the picture), so it keeps the full camera width
-  const maxSide = view.h <= 0.5 && !view.rotate ? Math.max(opts.maxSide || 0, 2560) : opts.maxSide;
+  const maxSide = view.h <= 0.5 && !view.rotate ? Math.max(opts.maxSide || 0, 1600) : opts.maxSide;
   const canvas = cropToCanvas(src, width * view.x, height * view.y, width * view.w, height * view.h, { rotate: view.rotate, ...opts, maxSide });
   return decodeCanvas(canvas, opts.inverted, opts.hints);
 }
@@ -152,9 +152,9 @@ async function nativeDecode(src) {
 // ---------- live camera ----------
 
 const CAMERA_ATTEMPTS = [
-  // as sharp as the phone allows (the phone falls back by itself when it cannot do this size)
-  { video: { facingMode: { ideal: "environment" }, width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30 } } },
-  { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+  // 1080p is sharp enough for a label barcode and light enough for the phone (2K / 4K made the phone hang)
+  { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 24 } } },
+  { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } },
   { video: { facingMode: "environment" } },
   { video: true },
 ];
@@ -192,28 +192,7 @@ export async function startScanner({ container, onDecoded, onStatus }) {
   let timer = null;
   let candidate = { text: "", count: 0 };
   let frames = 0;
-  let stills = 0;
   let nativeOn = false;
-
-  // Barcode-scanner apps read the camera's FULL-resolution picture. A web video stream is only ~1080p, so, as an extra
-  // attempt, a full-resolution still (ImageCapture, Chrome / Android) is taken every ~1.5 s and decoded in the background.
-  let imageCapture = null;
-  try { if ("ImageCapture" in window && track) imageCapture = new window.ImageCapture(track); } catch { imageCapture = null; }
-  let stillBusy = false;
-  let stillErrors = 0;
-  let lastStillAt = 0;
-  const tryStill = () => {
-    if (!imageCapture || stillBusy || stillErrors >= 3 || performance.now() - lastStillAt < 1500) return;
-    stillBusy = true;
-    lastStillAt = performance.now();
-    imageCapture
-      .takePhoto({ fillLightMode: "off" })
-      .catch(() => imageCapture.takePhoto())
-      .then((blob) => { stills += 1; return decodeImageFile(blob, { allowWeak: false }); })
-      .then((text) => { if (text && !stopped) onDecoded(text); })
-      .catch(() => { stillErrors += 1; })
-      .finally(() => { stillBusy = false; lastStillAt = performance.now(); });
-  };
 
   // A strong format (Code 128, QR ...) is accepted at once. A number-only retail format must be read the same
   // several times in a row, otherwise it is most likely a misread of a Code 128 label.
@@ -240,15 +219,14 @@ export async function startScanner({ container, onDecoded, onStatus }) {
         if (!hit && !stopped) {
           const view = VIEWS[tick % VIEWS.length];
           const all = tick % 4 === 3; // number-only formats only every 4th round
-          hit = decodeView(video, w, h, view, { maxSide: 1280, hints: all ? HINTS_ALL : HINTS_STRONG, inverted: tick % 9 === 8 });
+          hit = decodeView(video, w, h, view, { maxSide: 1100, hints: all ? HINTS_ALL : HINTS_STRONG, inverted: tick % 12 === 11 });
         }
         if (!stopped) accept(hit);
-        if (!hit && tick >= 6) tryStill();
         tick += 1;
       }
     } catch { /* a bad frame is skipped */ }
-    if (!stopped && onStatus && frames % 4 === 0) onStatus({ video: `${video.videoWidth}x${video.videoHeight}`, reader: nativeOn ? "built-in + ZXing" : "ZXing", frames, stills });
-    if (!stopped) timer = setTimeout(loop, Math.max(120, (performance.now() - began) * 2));
+    if (!stopped && onStatus && frames % 12 === 0) onStatus({ video: `${video.videoWidth}x${video.videoHeight}`, reader: nativeOn ? "built-in + ZXing" : "ZXing", frames });
+    if (!stopped) timer = setTimeout(loop, Math.max(250, (performance.now() - began) * 3));
   };
   timer = setTimeout(loop, 400);
 

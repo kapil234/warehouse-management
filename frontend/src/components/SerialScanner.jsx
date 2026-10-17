@@ -501,16 +501,16 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
-        {/* Square, clear picture (nothing dims it). Tap the picture to focus. */}
-        <div onClick={refocus} style={{ maxWidth: "min(100%, 55vh)" }} className="relative mx-auto aspect-square w-full overflow-hidden rounded-lg bg-black">
+        {/* Clear picture, nothing dims it. Tap the picture to focus. */}
+        <div onClick={refocus} className="relative h-64 w-full overflow-hidden rounded-lg bg-black sm:h-72">
           <div ref={readerRef} className="h-full w-full" />
-          {/* Scan square: put the barcode inside the corners */}
+          {/* Scan rectangle: fit the barcode inside the corners */}
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="relative h-[84%] w-[84%] drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]">
-              <span className="absolute -left-0.5 -top-0.5 h-8 w-8 rounded-tl-lg border-l-4 border-t-4 border-white" />
-              <span className="absolute -right-0.5 -top-0.5 h-8 w-8 rounded-tr-lg border-r-4 border-t-4 border-white" />
-              <span className="absolute -bottom-0.5 -left-0.5 h-8 w-8 rounded-bl-lg border-b-4 border-l-4 border-white" />
-              <span className="absolute -bottom-0.5 -right-0.5 h-8 w-8 rounded-br-lg border-b-4 border-r-4 border-white" />
+            <div className="relative h-[42%] w-[92%] drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]">
+              <span className="absolute -left-0.5 -top-0.5 h-6 w-6 rounded-tl-md border-l-4 border-t-4 border-white" />
+              <span className="absolute -right-0.5 -top-0.5 h-6 w-6 rounded-tr-md border-r-4 border-t-4 border-white" />
+              <span className="absolute -bottom-0.5 -left-0.5 h-6 w-6 rounded-bl-md border-b-4 border-l-4 border-white" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-6 w-6 rounded-br-md border-b-4 border-r-4 border-white" />
             </div>
           </div>
         </div>
@@ -536,7 +536,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
         </div>
-        {camInfo && <p className="mt-2 text-center text-[11px] text-gray-400">{camInfo.video} · {camInfo.reader} · checked {camInfo.frames} frames{camInfo.stills ? ` · ${camInfo.stills} HD photos` : ""}</p>}
+        {camInfo && <p className="mt-2 text-center text-[11px] text-gray-400">{camInfo.video} · {camInfo.reader} · checked {camInfo.frames} frames</p>}
         {camNote && <p className={`mt-3 break-all rounded-lg px-3 py-2 text-center text-sm font-semibold ${camNote.ok ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{camNote.text}</p>}
         <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={scanPhoto} />
