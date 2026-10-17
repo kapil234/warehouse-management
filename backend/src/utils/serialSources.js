@@ -67,6 +67,7 @@ export function canonicalOutwardType(type) {
   return String(type).trim();
 }
 
+const DISPATCHED_STATUSES = ["DISPATCHED", "DELIVERED"];
 const sameSerial = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
 /**
@@ -87,7 +88,7 @@ export async function findSerialSourceProblem(db, { warehouseId, outwardType, mi
     }),
     db.minSerial.findMany({
       where: { minId: { not: minId }, OR: match, min: { status: { not: "REJECTED" } } },
-      select: { serialNo: true, min: { select: { outwardNumber: true, createdAt: true } } },
+      select: { serialNo: true, category: true, sku: true, min: { select: { outwardNumber: true, createdAt: true, status: true } } },
     }),
   ]);
 
@@ -105,11 +106,18 @@ export async function findSerialSourceProblem(db, { warehouseId, outwardType, mi
       problems.push(`"${s.serialNo}" came in as ${cameAs}`);
       continue;
     }
-    const used = outwardRows.filter((r) => sameSerial(r.serialNo, s.serialNo));
+    // Only the same serial of the SAME product counts: another model that happens to have the same number is a different unit.
+    const used = outwardRows.filter((r) => sameSerial(r.serialNo, s.serialNo) && serialKey(r.category, r.sku) === key);
     if (used.length) {
       const last = used.reduce((a, b) => (new Date(b.min.createdAt) > new Date(a.min.createdAt) ? b : a));
       const cameInAgain = eligible.some((r) => new Date(r.grn.createdAt) > new Date(last.min.createdAt));
-      if (!cameInAgain) problems.push(`"${s.serialNo}" is already used in outward ${last.min.outwardNumber}`);
+      if (!cameInAgain) {
+        problems.push(
+          DISPATCHED_STATUSES.includes(last.min.status)
+            ? `"${s.serialNo}" is already dispatched in outward ${last.min.outwardNumber}`
+            : `"${s.serialNo}" is already added to outward ${last.min.outwardNumber}, which is not dispatched yet`
+        );
+      }
     }
   }
 
@@ -145,11 +153,12 @@ export async function listAvailableSerials(db, { warehouseId, outwardType, minId
 
   const usedRows = await db.minSerial.findMany({
     where: { minId: { not: minId }, serialNo: { in: [...new Set(eligible.map((r) => r.serialNo))] }, min: { status: { not: "REJECTED" } } },
-    select: { serialNo: true, min: { select: { createdAt: true } } },
+    select: { serialNo: true, category: true, sku: true, min: { select: { createdAt: true } } },
   });
+  // keyed by product + serial: the same number on another model is a different unit
   const lastOut = new Map();
   for (const u of usedRows) {
-    const k = u.serialNo.toLowerCase();
+    const k = `${serialKey(u.category, u.sku)}|${u.serialNo.toLowerCase()}`;
     const at = new Date(u.min.createdAt).getTime();
     if (!lastOut.has(k) || at > lastOut.get(k)) lastOut.set(k, at);
   }
@@ -157,9 +166,9 @@ export async function listAvailableSerials(db, { warehouseId, outwardType, minId
   const seen = new Set();
   for (const r of eligible) {
     const k = r.serialNo.toLowerCase();
-    const out = lastOut.get(k);
-    if (out != null && !(new Date(r.grn.createdAt).getTime() > out)) continue; // left already and has not come in again
     const key = serialKey(r.category, r.sku);
+    const out = lastOut.get(`${key}|${k}`);
+    if (out != null && !(new Date(r.grn.createdAt).getTime() > out)) continue; // left already and has not come in again
     if (!result[key]) continue;
     const dedupe = `${key}|${k}`;
     if (seen.has(dedupe)) continue;
