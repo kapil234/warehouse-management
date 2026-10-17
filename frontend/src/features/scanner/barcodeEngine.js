@@ -112,7 +112,9 @@ const VIEWS = [
 ];
 
 function decodeView(src, width, height, view, opts = {}) {
-  const canvas = cropToCanvas(src, width * view.x, height * view.y, width * view.w, height * view.h, { rotate: view.rotate, ...opts });
+  // the centre band is cheap (half the picture), so it keeps the full camera width
+  const maxSide = view.h <= 0.5 && !view.rotate ? Math.max(opts.maxSide || 0, 1920) : opts.maxSide;
+  const canvas = cropToCanvas(src, width * view.x, height * view.y, width * view.w, height * view.h, { rotate: view.rotate, ...opts, maxSide });
   return decodeCanvas(canvas, opts.inverted, opts.hints);
 }
 
@@ -125,7 +127,9 @@ function getNativeDetector() {
     try {
       if (!("BarcodeDetector" in window)) return null;
       const supported = await window.BarcodeDetector.getSupportedFormats();
-      return supported.length ? new window.BarcodeDetector({ formats: supported }) : new window.BarcodeDetector();
+      // Label formats only. Asked for EAN / UPC too, the phone's detector reads a dense Code 128 label as a made-up number.
+      const wanted = ["code_128", "code_39", "code_93", "qr_code", "data_matrix", "aztec", "pdf417"].filter((f) => supported.includes(f));
+      return wanted.length ? new window.BarcodeDetector({ formats: wanted }) : null;
     } catch {
       return null;
     }
@@ -205,6 +209,7 @@ export async function startScanner({ container, onDecoded }) {
       const h = video.videoHeight;
       if (w && h && video.readyState >= 2) {
         let hit = await nativeDecode(video);
+        if (hit && WEAK_NAMES.has(hit.format)) hit = null;
         if (!hit && !stopped) {
           const view = VIEWS[tick % VIEWS.length];
           const all = tick % 4 === 3; // number-only formats only every 4th round

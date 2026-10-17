@@ -486,7 +486,6 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
               <span className="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr-md border-r-4 border-t-4 border-white" />
               <span className="absolute -bottom-0.5 -left-0.5 h-5 w-5 rounded-bl-md border-b-4 border-l-4 border-white" />
               <span className="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-br-md border-b-4 border-r-4 border-white" />
-              <span className="absolute inset-x-2 top-1/2 h-0.5 -translate-y-1/2 animate-pulse bg-red-500/80" />
             </div>
           </div>
         </div>
@@ -512,7 +511,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
         </div>
-        {camNote && <p className={`mt-3 break-all rounded-lg px-3 py-2 text-center text-sm font-semibold ${camNote.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>{camNote.text}</p>}
+        {camNote && <p className={`mt-3 break-all rounded-lg px-3 py-2 text-center text-sm font-semibold ${camNote.ok ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{camNote.text}</p>}
         <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={scanPhoto} />
         <button type="button" onClick={() => photoInputRef.current?.click()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
