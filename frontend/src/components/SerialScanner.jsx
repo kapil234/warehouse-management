@@ -66,6 +66,7 @@ const SOURCE_LABEL = { CAMERA: "camera", SCANNER: "scanner", MANUAL: "typed" };
 export default function useSerialScanner({ items = [], lines = [], values = {}, onChange, disabled = false, suggestions = null }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lastScan, setLastScan] = useState("");
+  const [camInfo, setCamInfo] = useState(null); // small status line: reader type, frames checked
   const [camNote, setCamNote] = useState(null); // what the camera just read and why it was / was not added
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
   const [dropOpen, setDropOpen] = useState(null); // rowIndex whose "in stock" dropdown is open
@@ -280,6 +281,16 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       try {
         if (caps.focusMode?.includes?.("continuous")) await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
       } catch { /* focus control is optional */ }
+      // clear, bright picture (the preview looked dim on some phones)
+      try {
+        const adv = {};
+        if (caps.exposureMode?.includes?.("continuous")) adv.exposureMode = "continuous";
+        if (caps.whiteBalanceMode?.includes?.("continuous")) adv.whiteBalanceMode = "continuous";
+        if (caps.exposureCompensation && Number.isFinite(caps.exposureCompensation.max)) {
+          adv.exposureCompensation = Math.min(caps.exposureCompensation.max, (caps.exposureCompensation.step || 0.5) * 2);
+        }
+        if (Object.keys(adv).length) await track.applyConstraints({ advanced: [adv] });
+      } catch { /* exposure control is optional */ }
       const z = caps.zoom && Number.isFinite(caps.zoom.max) && caps.zoom.max > caps.zoom.min
         ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 8), step: caps.zoom.step || 0.1 }
         : null;
@@ -288,7 +299,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
 
     (async () => {
       try {
-        engine = await startScanner({ container: readerRef.current, onDecoded });
+        engine = await startScanner({ container: readerRef.current, onDecoded, onStatus: (info) => { if (!cancelled) setCamInfo(info); } });
         if (cancelled) { engine.stop(); engine = null; return; }
         await setupTrack(engine.track);
       } catch (err) {
@@ -317,6 +328,18 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     lastDecoded.current = { text, at: Date.now() };
     if (addToSelectedRef.current(text, "CAMERA")) { setCamNote({ ok: true, text: `Read: ${cameraSerial(text, null)}` }); beep(); }
     else setCamNote({ ok: false, text: `Read: ${cameraSerial(text, null)} - not added (not in stock for this item, already entered, or the item is full).` });
+  };
+
+  // Tap the picture: focus again on that spot (phones that support it), then back to continuous focus.
+  const refocus = async () => {
+    const track = trackRef.current;
+    const caps = track?.getCapabilities?.() || {};
+    try {
+      if (caps.focusMode?.includes?.("single-shot")) {
+        await track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] });
+        setTimeout(() => track?.applyConstraints?.({ advanced: [{ focusMode: "continuous" }] }).catch(() => {}), 1200);
+      }
+    } catch { /* focus control is optional */ }
   };
 
   const toggleTorch = async () => {
@@ -354,6 +377,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     lastDecoded.current = { text: "", at: 0 };
     setLastScan("");
     setCamNote(null);
+    setCamInfo(null);
     setCameraOpen(true);
   };
 
@@ -477,15 +501,16 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </div>
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
-        <div className="relative h-60 w-full overflow-hidden rounded-lg bg-black sm:h-64">
+        {/* Square, clear picture (nothing dims it). Tap the picture to focus. */}
+        <div onClick={refocus} style={{ maxWidth: "min(100%, 55vh)" }} className="relative mx-auto aspect-square w-full overflow-hidden rounded-lg bg-black">
           <div ref={readerRef} className="h-full w-full" />
-          {/* Scan frame: put the barcode inside this rectangle */}
+          {/* Scan square: put the barcode inside the corners */}
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="relative h-[46%] w-[90%] rounded-md shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
-              <span className="absolute -left-0.5 -top-0.5 h-5 w-5 rounded-tl-md border-l-4 border-t-4 border-white" />
-              <span className="absolute -right-0.5 -top-0.5 h-5 w-5 rounded-tr-md border-r-4 border-t-4 border-white" />
-              <span className="absolute -bottom-0.5 -left-0.5 h-5 w-5 rounded-bl-md border-b-4 border-l-4 border-white" />
-              <span className="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-br-md border-b-4 border-r-4 border-white" />
+            <div className="relative h-[84%] w-[84%] drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]">
+              <span className="absolute -left-0.5 -top-0.5 h-8 w-8 rounded-tl-lg border-l-4 border-t-4 border-white" />
+              <span className="absolute -right-0.5 -top-0.5 h-8 w-8 rounded-tr-lg border-r-4 border-t-4 border-white" />
+              <span className="absolute -bottom-0.5 -left-0.5 h-8 w-8 rounded-bl-lg border-b-4 border-l-4 border-white" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-8 w-8 rounded-br-lg border-b-4 border-r-4 border-white" />
             </div>
           </div>
         </div>
@@ -511,6 +536,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
         </div>
+        {camInfo && <p className="mt-2 text-center text-[11px] text-gray-400">{camInfo.video} · {camInfo.reader} · checked {camInfo.frames} frames{camInfo.stills ? ` · ${camInfo.stills} HD photos` : ""}</p>}
         {camNote && <p className={`mt-3 break-all rounded-lg px-3 py-2 text-center text-sm font-semibold ${camNote.ok ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{camNote.text}</p>}
         <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={scanPhoto} />

@@ -113,7 +113,7 @@ const VIEWS = [
 
 function decodeView(src, width, height, view, opts = {}) {
   // the centre band is cheap (half the picture), so it keeps the full camera width
-  const maxSide = view.h <= 0.5 && !view.rotate ? Math.max(opts.maxSide || 0, 1920) : opts.maxSide;
+  const maxSide = view.h <= 0.5 && !view.rotate ? Math.max(opts.maxSide || 0, 2560) : opts.maxSide;
   const canvas = cropToCanvas(src, width * view.x, height * view.y, width * view.w, height * view.h, { rotate: view.rotate, ...opts, maxSide });
   return decodeCanvas(canvas, opts.inverted, opts.hints);
 }
@@ -152,6 +152,8 @@ async function nativeDecode(src) {
 // ---------- live camera ----------
 
 const CAMERA_ATTEMPTS = [
+  // as sharp as the phone allows (the phone falls back by itself when it cannot do this size)
+  { video: { facingMode: { ideal: "environment" }, width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30 } } },
   { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
   { video: { facingMode: "environment" } },
   { video: true },
@@ -161,7 +163,7 @@ const CAMERA_ATTEMPTS = [
  * Opens the camera inside `container` and keeps decoding until stop() is called.
  * Resolves { stop, track }. Rejects with the camera error (NotAllowedError etc.).
  */
-export async function startScanner({ container, onDecoded }) {
+export async function startScanner({ container, onDecoded, onStatus }) {
   let stream = null;
   let lastError = null;
   for (const constraints of CAMERA_ATTEMPTS) {
@@ -189,6 +191,9 @@ export async function startScanner({ container, onDecoded }) {
   let tick = 0;
   let timer = null;
   let candidate = { text: "", count: 0 };
+  let frames = 0;
+  let stills = 0;
+  let nativeOn = false;
 
   // Barcode-scanner apps read the camera's FULL-resolution picture. A web video stream is only ~1080p, so, as an extra
   // attempt, a full-resolution still (ImageCapture, Chrome / Android) is taken every ~1.5 s and decoded in the background.
@@ -204,7 +209,7 @@ export async function startScanner({ container, onDecoded }) {
     imageCapture
       .takePhoto({ fillLightMode: "off" })
       .catch(() => imageCapture.takePhoto())
-      .then((blob) => decodeImageFile(blob, { allowWeak: false }))
+      .then((blob) => { stills += 1; return decodeImageFile(blob, { allowWeak: false }); })
       .then((text) => { if (text && !stopped) onDecoded(text); })
       .catch(() => { stillErrors += 1; })
       .finally(() => { stillBusy = false; lastStillAt = performance.now(); });
@@ -228,6 +233,8 @@ export async function startScanner({ container, onDecoded }) {
       const w = video.videoWidth;
       const h = video.videoHeight;
       if (w && h && video.readyState >= 2) {
+        nativeOn = Boolean(await getNativeDetector());
+        frames += 1;
         let hit = await nativeDecode(video);
         if (hit && WEAK_NAMES.has(hit.format)) hit = null;
         if (!hit && !stopped) {
@@ -240,6 +247,7 @@ export async function startScanner({ container, onDecoded }) {
         tick += 1;
       }
     } catch { /* a bad frame is skipped */ }
+    if (!stopped && onStatus && frames % 4 === 0) onStatus({ video: `${video.videoWidth}x${video.videoHeight}`, reader: nativeOn ? "built-in + ZXing" : "ZXing", frames, stills });
     if (!stopped) timer = setTimeout(loop, Math.max(120, (performance.now() - began) * 2));
   };
   timer = setTimeout(loop, 400);
