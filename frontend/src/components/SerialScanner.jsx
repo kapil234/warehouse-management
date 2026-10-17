@@ -52,13 +52,13 @@ function beep() {
   navigator.vibrate?.(60);
 }
 
-// CAMERA only: the WHOLE barcode text (hidden control characters and spaces removed). The scanner / typed path
-// keeps using resolveScannedSerial exactly as before.
+// CAMERA only. Hidden control characters are removed, then the serial is matched against the serials in stock for
+// the item exactly like a Bluetooth scan (whole text, one of its words, or contained in it) - so a label
+// "SG33CX-P2-V124 I2690100027" finds the stock serial. With nothing in stock to match (e.g. inward form) the WHOLE
+// text is kept (spaces removed). The model name is never cut off.
 const cameraSerial = (raw, stock) => {
-  const whole = cleanSerialInput(String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, ""));
-  if (!whole) return "";
-  const hit = stock?.find((sn) => cleanSerialInput(sn).toLowerCase() === whole.toLowerCase());
-  return hit || whole;
+  const text = String(raw ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return resolveScannedSerial(text, { sku: "", stock });
 };
 
 const SOURCE_LABEL = { CAMERA: "camera", SCANNER: "scanner", MANUAL: "typed" };
@@ -66,6 +66,7 @@ const SOURCE_LABEL = { CAMERA: "camera", SCANNER: "scanner", MANUAL: "typed" };
 export default function useSerialScanner({ items = [], lines = [], values = {}, onChange, disabled = false, suggestions = null }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lastScan, setLastScan] = useState("");
+  const [camNote, setCamNote] = useState(null); // what the camera just read and why it was / was not added
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
   const [dropOpen, setDropOpen] = useState(null); // rowIndex whose "in stock" dropdown is open
   const [camTools, setCamTools] = useState({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
@@ -257,7 +258,18 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       const now = Date.now();
       if (text === lastDecoded.current.text && now - lastDecoded.current.at < 2000) return;
       lastDecoded.current = { text, at: now };
-      if (addToSelectedRef.current(text, "CAMERA")) beep();
+      // Shown INSIDE the camera pop-up (the centre messages can sit behind it), so it is always clear what was read.
+      const { rows: R, suggestions: S } = live.current;
+      const t = activeRow.current;
+      const stock = t != null && R[t] && S ? S[R[t].key] : null;
+      const serial = cameraSerial(text, stock);
+      const notInStock = stock && !stock.some((sn) => cleanSerialInput(sn).toLowerCase() === serial.toLowerCase());
+      if (addToSelectedRef.current(text, "CAMERA")) {
+        setCamNote({ ok: true, text: `Read: ${serial}` });
+        beep();
+      } else {
+        setCamNote({ ok: false, text: notInStock ? `Read: ${serial} - NOT added: it is not in stock for this item (or already dispatched). Check that the label belongs to the selected item.` : `Read: ${serial} - not added (already entered, or the item is full).` });
+      }
     };
 
     // Picks up focus / zoom / torch of the running camera track.
@@ -303,7 +315,8 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const text = await decodeImageFile(file);
     if (!text) return toast.warn("No barcode found in the photo. Take it closer, flat, sharp and well lit, then try again.");
     lastDecoded.current = { text, at: Date.now() };
-    if (addToSelectedRef.current(text, "CAMERA")) beep();
+    if (addToSelectedRef.current(text, "CAMERA")) { setCamNote({ ok: true, text: `Read: ${cameraSerial(text, null)}` }); beep(); }
+    else setCamNote({ ok: false, text: `Read: ${cameraSerial(text, null)} - not added (not in stock for this item, already entered, or the item is full).` });
   };
 
   const toggleTorch = async () => {
@@ -340,6 +353,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     selectRow(rowIndex);
     lastDecoded.current = { text: "", at: 0 };
     setLastScan("");
+    setCamNote(null);
     setCameraOpen(true);
   };
 
@@ -498,6 +512,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
         </div>
+        {camNote && <p className={`mt-3 break-all rounded-lg px-3 py-2 text-center text-sm font-semibold ${camNote.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>{camNote.text}</p>}
         <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={scanPhoto} />
         <button type="button" onClick={() => photoInputRef.current?.click()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
