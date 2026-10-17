@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Plus, X, Zap, ZapOff } from "lucide-react";
+import { Camera, CheckCircle2, ImagePlus, Minus, Plus, X, Zap, ZapOff } from "lucide-react";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
-import { toast } from "react-toastify";
-import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../features/outward/serialHelpers";
+import { toast } from "./CenterMessage";
+import { cleanSerialInput, countFilled, serialKey, needsSerials, sortSerials, resolveScannedSerial } from "../features/outward/serialHelpers";
 
 /**
  * Serial numbers inside the Item details table.
@@ -20,6 +20,7 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials } from "../featu
  */
 
 const READER_ID = "serial-camera-reader";
+const FILE_READER_ID = "serial-file-reader"; // hidden: decodes a photo taken with the phone's own camera app
 
 // Product labels carry dense 1D barcodes (Code 128). Telling the reader which formats to look for makes it
 // faster and far more reliable than trying every format on every frame.
@@ -73,11 +74,13 @@ function beep() {
 
 const SOURCE_LABEL = { CAMERA: "camera", SCANNER: "scanner", MANUAL: "typed" };
 
-export default function useSerialScanner({ items = [], lines = [], values = {}, onChange, disabled = false }) {
+export default function useSerialScanner({ items = [], lines = [], values = {}, onChange, disabled = false, suggestions = null }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lastScan, setLastScan] = useState("");
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
-  const [camTools, setCamTools] = useState({ torch: false, torchOn: false });
+  const [dropOpen, setDropOpen] = useState(null); // rowIndex whose "in stock" dropdown is open
+  const [camTools, setCamTools] = useState({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
+  const [photoBusy, setPhotoBusy] = useState(false);
 
   const inputRefs = useRef({}); // rowIndex -> input element
   const keyStats = useRef({ start: 0, last: 0, count: 0 });
@@ -101,7 +104,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   }, [items]);
 
   const live = useRef({});
-  live.current = { lines, values, onChange, rows };
+  live.current = { lines, values, onChange, rows, items, suggestions };
 
   const total = lines.reduce((n, l) => n + l.quantity, 0);
   const filled = lines.reduce((n, l) => n + countFilled(values, l.key), 0);
@@ -115,8 +118,10 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
    * on), goes on to the next items when that one is full - unless `onlyRow` is set (typed into one item).
    */
   const addSerial = (raw, source, startRow = activeRow.current, onlyRow = false) => {
-    const { lines: L, values: V, onChange: change, rows: R } = live.current;
-    const serialNo = cleanSerialInput(raw);
+    const { lines: L, values: V, onChange: change, rows: R, items: I, suggestions: S } = live.current;
+    // A label barcode can hold "MODEL SERIAL": keep only the serial (checked against what is in stock for the item).
+    const target = startRow != null ? R[startRow] : null;
+    const serialNo = resolveScannedSerial(raw, { sku: startRow != null ? I[startRow]?.sku : "", stock: target && S ? S[target.key] : null });
     if (!serialNo) return false;
     const exists = L.some((l) => (V[l.key] || []).some((s) => cleanSerialInput(s.serialNo).toLowerCase() === serialNo.toLowerCase()));
     if (exists) {
@@ -266,18 +271,29 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       try {
         if (caps.focusMode?.includes?.("continuous")) await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
       } catch { /* focus control is optional */ }
-      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false });
+      const z = caps.zoom && Number.isFinite(caps.zoom.max) && caps.zoom.max > caps.zoom.min
+        ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 8), step: caps.zoom.step || 0.1 }
+        : null;
+      // Tiny, dense labels need pixels: start at a gentle zoom so the barcode fills more of the picture.
+      let zoomValue = z ? z.min : 1;
+      if (z) {
+        const start = Math.min(Math.max(2, z.min), z.max);
+        try { await track.applyConstraints({ advanced: [{ zoom: start }] }); zoomValue = start; } catch { /* zoom is optional */ }
+      }
+      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom: z, zoomValue });
     };
 
+    // A dense label barcode (about 1 px per bar at 1080p) only decodes when the camera gives MORE pixels, so ask
+    // for the biggest picture first (4K where a native barcode detector can keep up, 1440p otherwise) and step down.
+    const native = typeof window !== "undefined" && "BarcodeDetector" in window;
+    const big = native ? { width: { ideal: 3840 }, height: { ideal: 2160 } } : { width: { ideal: 2560 }, height: { ideal: 1440 } };
     const attempts = [
-      // 1) HD picture of the whole view: a dense barcode needs the detail
-      () => ({
-        camera: { facingMode: "environment" },
-        config: { fps: 20, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      }),
-      // 2) back camera with the device's default picture size
+      () => ({ camera: { facingMode: "environment" }, config: { fps: native ? 15 : 10, disableFlip: true, videoConstraints: { facingMode: "environment", ...big } } }),
+      // HD picture of the whole view
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } } }),
+      // back camera with the device's default picture size
       () => ({ camera: { facingMode: "environment" }, config: { fps: 15, disableFlip: true } }),
-      // 3) any camera (some devices / laptops have no back camera)
+      // any camera (some devices / laptops have no back camera)
       () => ({ camera: { facingMode: "user" }, config: { fps: 15, disableFlip: true } }),
     ];
 
@@ -312,7 +328,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     return () => {
       cancelled = true;
       trackRef.current = null;
-      setCamTools({ torch: false, torchOn: false });
+      setCamTools({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
       if (reader && running) {
         reader.stop().then(() => reader.clear?.()).catch(() => {});
       }
@@ -327,6 +343,35 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       await track.applyConstraints({ advanced: [{ torch: next }] });
       setCamTools((t) => ({ ...t, torchOn: next }));
     } catch { toast.info("Flash is not available on this camera."); }
+  };
+
+  const setZoom = async (value) => {
+    const track = trackRef.current;
+    const z = camTools.zoom;
+    if (!track || !z) return;
+    const next = Math.min(z.max, Math.max(z.min, value));
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: next }] });
+      setCamTools((t) => ({ ...t, zoomValue: next }));
+    } catch { /* zoom is optional */ }
+  };
+
+  // Most reliable for tiny labels: take the picture with the phone's own camera app (full sensor size, macro focus)
+  // and read the barcode from that photo.
+  const scanPhoto = async (file) => {
+    if (!file) return;
+    setPhotoBusy(true);
+    let reader = null;
+    try {
+      reader = new Html5Qrcode(FILE_READER_ID, READER_OPTIONS);
+      const text = await reader.scanFile(file, false);
+      if (addToSelectedRef.current(text, "CAMERA")) beep();
+    } catch {
+      toast.warn("No barcode found in that photo. Move closer so the barcode fills the picture, keep it sharp and flat, and try again.");
+    } finally {
+      try { reader?.clear?.(); } catch { /* ignore */ }
+      setPhotoBusy(false);
+    }
   };
 
 
@@ -355,20 +400,53 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       return <span className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-green-700"><CheckCircle2 size={14} />{count} / {row.quantity} added</span>;
     }
     if (disabled) return <span className="text-xs text-gray-400">-</span>;
+    // Serial numbers in stock for this item (not entered yet), narrowed by what is typed.
+    const stockList = suggestions ? suggestions[row.key] || [] : null;
+    const typed = (drafts[rowIndex] || "").toLowerCase();
+    const entered = new Set(lines.flatMap((l) => (values[l.key] || []).map((s) => cleanSerialInput(s.serialNo).toLowerCase())).filter(Boolean));
+    const available = stockList ? sortSerials(stockList).filter((sn) => !entered.has(sn.toLowerCase()) && (!typed || sn.toLowerCase().includes(typed))) : [];
+    const pick = (sn) => {
+      addSerial(sn, "MANUAL", rowIndex, true);
+      setDrafts((d) => ({ ...d, [rowIndex]: "" }));
+      focusInput(rowIndex);
+    };
     return (
       <div className={`flex items-center ${mobile ? "w-full gap-1.5 py-0" : "min-w-[330px] gap-2 py-1"}`}>
+        <div className="relative min-w-0 flex-1">
         <input
           ref={(el) => { inputRefs.current[rowIndex] = el; }}
           value={drafts[rowIndex] || ""}
           autoComplete="off"
           autoCapitalize="characters"
           spellCheck={false}
-          placeholder="SR. No"
-          onFocus={() => selectRow(rowIndex)}
-          onChange={(e) => setDrafts((d) => ({ ...d, [rowIndex]: cleanSerialInput(e.target.value) }))}
-          onKeyDown={(e) => handleKeyDown(e, rowIndex)}
+          placeholder={stockList ? `SR. No (${stockList.length} in stock)` : "SR. No"}
+          onFocus={() => { selectRow(rowIndex); setDropOpen(rowIndex); }}
+          onClick={() => setDropOpen(rowIndex)}
+          onBlur={() => setTimeout(() => setDropOpen((o) => (o === rowIndex ? null : o)), 150)}
+          onChange={(e) => { setDrafts((d) => ({ ...d, [rowIndex]: cleanSerialInput(e.target.value) })); setDropOpen(rowIndex); }}
+          onKeyDown={(e) => { if (e.key === "Escape") setDropOpen(null); handleKeyDown(e, rowIndex); }}
           className={`w-full min-w-0 flex-1 rounded-lg border border-gray-300 bg-white outline-none focus:border-gray-300 focus:ring-0 ${mobile ? "px-2.5 py-1.5 text-sm" : "px-3 py-2 text-sm"}`}
         />
+        {stockList && dropOpen === rowIndex && (
+          <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+            <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+              {available.length ? `In stock (${available.length})` : stockList.length ? "No matching serial no. in stock" : "No serial no. in stock for this item"}
+            </div>
+            {available.slice(0, 60).map((sn) => (
+              <button
+                key={sn}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(sn)}
+                className="block w-full px-3 py-1.5 text-left font-mono text-sm text-gray-800 hover:bg-blue-50"
+              >
+                {sn}
+              </button>
+            ))}
+            {available.length > 60 && <div className="px-3 py-1 text-xs text-gray-400">Type to narrow down {available.length - 60} more...</div>}
+          </div>
+        )}
+        </div>
         <button type="button" title="Add" onClick={() => submitDraft(rowIndex, "MANUAL")} className={`flex shrink-0 items-center gap-1 rounded-lg bg-gray-900 font-semibold text-white hover:bg-black ${mobile ? "h-9 px-2.5 text-xs" : "h-9 px-3 text-xs"}`}>
           <Plus size={14} />Add
         </button>
@@ -446,12 +524,34 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
             </div>
           </div>
         </div>
+        <div id={FILE_READER_ID} className="hidden" />
+        {camTools.zoom && (
+          <div className="mt-3 flex items-center gap-2">
+            <button type="button" aria-label="Zoom out" onClick={() => setZoom(camTools.zoomValue - 0.5)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 text-gray-700"><Minus size={16} /></button>
+            <input
+              type="range"
+              aria-label="Zoom"
+              min={camTools.zoom.min}
+              max={camTools.zoom.max}
+              step={camTools.zoom.step}
+              value={camTools.zoomValue}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="min-w-0 flex-1"
+            />
+            <button type="button" aria-label="Zoom in" onClick={() => setZoom(camTools.zoomValue + 0.5)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 text-gray-700"><Plus size={16} /></button>
+            <span className="w-10 shrink-0 text-right text-xs font-semibold text-gray-600">{camTools.zoomValue.toFixed(1)}x</span>
+          </div>
+        )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button type="button" onClick={toggleTorch} className={`flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
+          <label className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-semibold text-gray-700 ${photoBusy ? "pointer-events-none opacity-60" : ""}`}>
+            <ImagePlus size={16} />{photoBusy ? "Reading photo..." : "Scan from a photo (best for small labels)"}
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; scanPhoto(f); }} />
+          </label>
         </div>
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame - it reads automatically. Keep it flat and well lit; switch Flash on if it is dark."}</p>
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Fill the frame with the barcode (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>

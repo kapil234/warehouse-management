@@ -223,9 +223,9 @@ export async function downloadDocument(req, res) {
     const document = await prisma.document.findUnique({ where: { id: req.params.id } });
     if (!document) return res.status(404).json({ message: "Document not found." });
     const linked = await assertLinkedEntryAccess(req, document.linkedType, document.linkedId, null, document.docCategory);
-    // The warehouse manager never gets the Invoice, and Account's other documents as soon as they exist. Checked here too so a direct document id cannot bypass the list.
+    // The warehouse manager gets every Account document (the Invoice too) once the entry is approved. Checked here too so a direct document id cannot bypass the list.
     if (document.linkedType === "outward" && req.user.role === "WAREHOUSE_MANAGER" && isAccountDocCategory(document.docCategory)) {
-      if (isInvoiceDocCategory(document.docCategory) || !(isApprovedStatus(linked.status) || isDispatchedStatus(linked.status))) {
+      if (!(isApprovedStatus(linked.status) || isDispatchedStatus(linked.status))) {
         return res.status(403).json({ message: "You don't have access to this document." });
       }
     }

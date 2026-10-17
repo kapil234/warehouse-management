@@ -33,7 +33,7 @@ import {
 import { formatGrn } from "../features/inward/inwardHelpers";
 import HistoryPanel from "../features/shared/HistoryPanel";
 
-const filters = ["All types", "New Stock", "Service Stock", "Returns"];
+const filters = ["All types", "New Stock", "Service Stock", "Repair-Service Stock", "Returns"];
 
 // Maps the filter chips to the exact inwardType value the backend expects
 // (?type=...), so filtering happens in the database query instead of after
@@ -41,6 +41,7 @@ const filters = ["All types", "New Stock", "Service Stock", "Returns"];
 const FILTER_TO_INWARD_TYPE = {
   "New Stock": "Purchase - New Stock",
   "Service Stock": "Purchase - Service Stock",
+  "Repair-Service Stock": "Repair-Service Stock",
   Returns: "Return of Purchase",
 };
 

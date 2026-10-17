@@ -16,6 +16,9 @@ export function formatInwardType(type) {
   const value = String(type).trim();
   const lower = value.toLowerCase();
 
+  if (lower.includes("repair")) {
+    return "Repair-Service Stock";
+  }
   if (lower.includes("purchase") && lower.includes("new")) {
     return "Purchase - New Stock";
   }

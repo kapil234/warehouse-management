@@ -2,6 +2,8 @@ import prisma from "../config/prisma.js";
 import { recordAuditLog, diffFields, diffItems, describeItem } from "../utils/auditLog.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
 import { isFinanceSide, getFinanceWarehouseIds } from "../utils/outwardWorkflow.js";
+import { cleanSerials } from "../utils/serials.js";
+import { validateInwardSerials, replaceGrnSerials, pruneGrnSerials } from "../utils/inwardSerials.js";
  
 /**
  * =========================================================
@@ -208,6 +210,8 @@ export async function listGrn(req, res) {
                 { items: { some: { sku: { contains: search, mode: "insensitive" } } } },
 
                 { items: { some: { category: { contains: search, mode: "insensitive" } } } },
+
+                { serials: { some: { serialNo: { contains: search, mode: "insensitive" } } } },
               ],
             }
           : {},
@@ -451,6 +455,7 @@ export async function getGrnById(req, res) {
  
         include: {
           items: true,
+          serials: { orderBy: { createdAt: "asc" } },
           referenceDocuments: true,
  
           createdBy: {
@@ -606,6 +611,7 @@ export async function updateGrn(req, res) {
         inwardType: true, supplierName: true, companyName: true,
         refDocType: true, refDocNumber: true, remarks: true,
         items: { select: { category: true, sku: true, companyName: true, quantity: true, uom: true } },
+        _count: { select: { serials: true } },
       },
     });
     if (!existing) return res.status(404).json({ message: "GRN not found" });
@@ -672,6 +678,15 @@ export async function updateGrn(req, res) {
       quantity: Number(item.quantity), uom: item.uom,
       companyName: item.companyName ? String(item.companyName).trim() || null : null,
     }));
+    // Serial numbers: when the client sends them they replace the saved ones; otherwise the saved ones are kept
+    // (and trimmed if the items changed).
+    const serialsProvided = Array.isArray(data.serials);
+    const serials = cleanSerials(data.serials);
+    if (serialsProvided) {
+      // An entry saved before serial numbers existed (none saved) can still be edited without them.
+      const serialProblem = validateInwardSerials(newItems, serials, { allowEmpty: existing._count.serials === 0 });
+      if (serialProblem) return res.status(422).json({ message: serialProblem });
+    }
     const fieldChanges = diffFields(existing, newSnapshot, [
       "inwardType", "supplierName", "companyName", "refDocType", "refDocNumber", "remarks",
     ]);
@@ -699,6 +714,14 @@ export async function updateGrn(req, res) {
         },
       });
  
+      let serialsChanged = false;
+      if (serialsProvided) {
+        await replaceGrnSerials(tx, id, serials);
+        serialsChanged = serials.length !== existing._count.serials;
+      } else {
+        serialsChanged = (await pruneGrnSerials(tx, id, newItems)) > 0;
+      }
+
       // -------------------------------------------------
       // AUDIT TRAIL
       // -------------------------------------------------
@@ -709,6 +732,14 @@ export async function updateGrn(req, res) {
         userId: req.user.id,
         warehouseId: existing.warehouseId,
       };
+      if (serialsChanged) {
+        await recordAuditLog(tx, {
+          ...auditBase,
+          action: "SERIALS_UPDATED",
+          description: serialsProvided ? `Serial numbers saved: ${serials.length}` : "Serial numbers removed because the items changed",
+          changes: { count: serials.length },
+        });
+      }
       for (const change of fieldChanges) {
         await recordAuditLog(tx, {
           ...auditBase,
@@ -741,7 +772,7 @@ export async function updateGrn(req, res) {
           changes: { field: "quantity", item: describeItem(item), oldValue: oldQuantity, newValue: newQuantity },
         });
       }
-      if (!fieldChanges.length && !itemChanges.added.length && !itemChanges.removed.length && !itemChanges.updated.length) {
+      if (!serialsChanged && !fieldChanges.length && !itemChanges.added.length && !itemChanges.removed.length && !itemChanges.updated.length) {
         await recordAuditLog(tx, {
           ...auditBase,
           action: "UPDATED",
@@ -749,7 +780,7 @@ export async function updateGrn(req, res) {
         });
       }
  
-      return tx.grn.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } });
+      return tx.grn.findUnique({ where: { id }, include: { items: true, serials: { orderBy: { createdAt: "asc" } }, referenceDocuments: true } });
     });
     return res.json({ message: "Inward entry updated successfully", data: result });
   } catch (error) {
@@ -964,6 +995,11 @@ export async function createGrn(req, res) {
       return true;
     });
  
+    // Serial numbers: one for every Pcs unit (an item of 5 Pcs needs 5).
+    const serials = cleanSerials(data.serials);
+    const serialProblem = validateInwardSerials(itemRows, serials);
+    if (serialProblem) return res.status(422).json({ message: serialProblem });
+
     let createdGrn = null;
     const MAX_NUMBER_ATTEMPTS = 10;
  
@@ -995,6 +1031,12 @@ export async function createGrn(req, res) {
               select: { id: true, grnNumber: true, warehouseId: true },
             });
  
+            if (serials.length) {
+              await tx.grnSerial.createMany({
+                data: serials.map((s) => ({ grnId: grn.id, category: s.category, sku: s.sku, serialNo: s.serialNo, source: s.source })),
+              });
+            }
+
             if (documentRows.length) {
               await tx.document.createMany({
                 data: documentRows.map((doc) => ({
@@ -1036,7 +1078,7 @@ export async function createGrn(req, res) {
     const [fullGrn, createdDocuments] = await Promise.all([
       prisma.grn.findUnique({
         where: { id: createdGrn.id },
-        include: { items: true, referenceDocuments: true },
+        include: { items: true, serials: { orderBy: { createdAt: "asc" } }, referenceDocuments: true },
       }),
       documentRows.length
         ? prisma.document.findMany({
@@ -1050,7 +1092,7 @@ export async function createGrn(req, res) {
         entityId: createdGrn.id,
         entityNumber: createdGrn.grnNumber,
         action: "CREATED",
-        description: `Inward entry ${createdGrn.grnNumber} created with ${itemRows.length} item${itemRows.length === 1 ? "" : "s"}`,
+        description: `Inward entry ${createdGrn.grnNumber} created with ${itemRows.length} item${itemRows.length === 1 ? "" : "s"}${serials.length ? ` and ${serials.length} serial number${serials.length === 1 ? "" : "s"}` : ""}`,
         userId: req.user.id,
         warehouseId: createdGrn.warehouseId,
       }),

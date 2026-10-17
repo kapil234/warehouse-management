@@ -21,9 +21,9 @@ import prisma from "../config/prisma.js";
  *
  *   TRANSPORT_PENDING   warehouse manager must fill the Transportation form (dedicated vehicle OR transporter)
  *   DOCS_PENDING        Account can now upload Invoice / E-way bill / DC Challan / Without Invoice / Other.
- *                       The Invoice is internal: it is NEVER shared with the warehouse.
- *                       Any other document (E-way bill / DC Challan / Without Invoice / Other) releases the entry to the warehouse.
- *   READY_FOR_DISPATCH  Dispatch form opens for the manager (vehicle / driver read-only, references, documents, serial scan)
+ *                       Every document (Invoice included) is shared with the warehouse manager.
+ *                       Any document (Invoice / E-way bill / DC Challan / Without Invoice / Other) releases the entry to the warehouse.
+ *   READY_FOR_DISPATCH  Dispatch form opens for the manager (vehicle / driver read-only, references, documents)
  *   DISPATCHED          Dispatch details saved ("Shipped"); Receiving form opens
  *   DELIVERED           Receiving form saved
  *
@@ -170,7 +170,6 @@ export function validatePi(data) {
 /** Returns an error message, or null when the Ship to / Bill to details are valid. */
 export function validateParty(data) {
   if (!String(data.shipToContactPerson || "").trim()) return "Ship to contact person is required";
-  if (!String(data.shipToLocation || "").trim()) return "Ship to location is required";
   if (!String(data.billToContactPerson || "").trim()) return "Bill to contact person is required";
   if (!String(data.shipToContactNo || "").trim()) return "Ship to contact no. is required";
   if (!String(data.billToContactNo || "").trim()) return "Bill to contact no. is required";
@@ -426,14 +425,14 @@ export function toTransportColumns(data) {
 }
 
 // Account documents that open the dispatch form for the warehouse manager.
-// Every Account document except the Invoice (E-way bill, DC Challan, Without Invoice, Other) releases the entry to the warehouse manager. The Invoice stays internal to Account.
-export const isReleaseDocCategory = (category) => /^(e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
+// Every Account document (Invoice, E-way bill, DC Challan, Without Invoice, Other) releases the entry to the warehouse manager.
+export const isReleaseDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
 export const isInvoiceDocCategory = (category) => /^invoice/i.test(String(category || "").trim());
 export const isInvoiceRefType = (type) => String(type || "").trim().toLowerCase() === "invoice";
-// Account reference types that release the entry: every account reference except the Invoice.
-export const isReleaseRefType = (type) => isAccountRefType(type) && !isInvoiceRefType(type);
-// An entry is released to the warehouse manager when Account has added ANY non-Invoice document (file) OR
-// ANY non-Invoice reference (E-way Bill / DC Challan / Without Invoice / Other). An Invoice alone stays internal.
+// Account reference types that release the entry: every account reference (Invoice included).
+export const isReleaseRefType = (type) => isAccountRefType(type);
+// An entry is released to the warehouse manager when Account has added ANY document (file) OR
+// ANY reference (Invoice / E-way Bill / DC Challan / Without Invoice / Other).
 export const hasReleaseDocument = (docs = [], refs = []) =>
   docs.some((d) => isReleaseDocCategory(d.docCategory)) || refs.some((r) => isReleaseRefType(r.refDocType));
 
@@ -504,19 +503,18 @@ export function transportLockReason(entry, docs = [], refs = []) {
   return accountUploaded ? TRANSPORT_LOCK_MESSAGE : null;
 }
 
-// Every document is shared with the warehouse manager the moment it exists - except the Invoice, which Account
-// creates and keeps to itself (the manager never gets the document, the reference or the download).
+// Every document is shared with the warehouse manager the moment it exists - the Invoice included.
 export const isReleasedStage = (stage) => stage === STAGE.READY_FOR_DISPATCH || stage === STAGE.DISPATCHED;
 
 export function documentsForWarehouse(docs = []) {
-  return docs.filter((d) => !isInvoiceDocCategory(d.docCategory));
+  return docs;
 }
 
 export function referencesForWarehouse(refs = []) {
-  return refs.filter((r) => !isInvoiceRefType(r.refDocType));
+  return refs;
 }
 
-/** True when Account has created an invoice (document or reference). Never sent to the warehouse manager. */
+/** True when Account has created an invoice (document or reference). */
 export const hasInvoice = (docs = [], refs = []) =>
   docs.some((d) => isInvoiceDocCategory(d.docCategory)) || refs.some((r) => isInvoiceRefType(r.refDocType));
 

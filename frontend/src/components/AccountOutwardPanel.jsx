@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Pause, Plus, Trash2, X } from "lucide-react";
 import { useDispatch } from "react-redux";
-import { toast } from "react-toastify";
+import { toast } from "./CenterMessage";
 import { saveAccountDocuments } from "../features/outward/outwardSlice";
 import {
   isReleaseDocCategory,
@@ -32,8 +32,8 @@ import OutwardDocuments from "./OutwardDocuments";
  * transportation form (`docsBlockedMessage` says why they are locked). Before that Account only decides
  * (Approve / Hold / Reject).
  *
- * Sharing: an Invoice on its own stays with the account team. Uploading a "DC challan" or "Without invoice"
- * document shares the entry with the warehouse manager and opens their dispatch form.
+ * Sharing: every document, the Invoice included, is shared with the warehouse manager. Uploading any document
+ * (Invoice, DC challan, Invoice without amount, ...) shares the entry with them and opens their dispatch form.
  * When the PI amount is above Rs. 1,00,000 the e-way bill document is needed before that.
  *
  * Approve / Reject / Hold: whatever is typed or picked is saved first (when documents are editable).
@@ -113,7 +113,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, docs
 
   const ewayProvided = hasEwayDocument(accountDocs, stagedDocs);
   const EWAY_MESSAGE = `The PI amount is above ₹${EWAY_BILL_THRESHOLD.toLocaleString("en-IN")}: upload the e-way bill document before sharing the documents with the warehouse.`;
-  // Shared once Account has any non-Invoice document (file) or any saved non-Invoice reference (E-way Bill / DC Challan / ...).
+  // Shared once Account has any document (file) or any saved reference (Invoice / E-way Bill / DC Challan / ...).
   const sharedWithWarehouse =
     accountDocs.some((d) => isReleaseDocCategory(d.docCategory)) || readOnlyRefs.some((r) => isReleaseRefType(r.refDocType));
 
@@ -228,7 +228,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, docs
             documents={accountDocs}
             requiredDocuments={[]}
             title="Documents"
-            subtitle="Invoice, e-way bill, DC challan, without invoice and other account documents"
+            subtitle="Invoice, e-way bill, DC challan, invoice without amount and other account documents"
           />
         )}
         {hasDecision && <div className="flex flex-wrap items-center justify-end gap-3">{decisionButtons}</div>}
@@ -260,8 +260,8 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, docs
           }`}
         >
           {sharedWithWarehouse
-            ? "Shared with the warehouse manager - their dispatch form is open. The Invoice is never shown to them."
-            : "Vehicle details received. An Invoice stays with the account team only. Upload any other document (e-way bill, DC challan, Without invoice or other) to share the entry with the warehouse manager and open their dispatch form."}
+            ? "Shared with the warehouse manager - their dispatch form is open. Every document you upload (the Invoice too) is visible to them."
+            : "Vehicle details received. Upload a document (invoice, e-way bill, DC challan, invoice without amount or other) to share the entry with the warehouse manager and open their dispatch form."}
         </div>
 
         {aboveLimit && (
@@ -318,7 +318,7 @@ export default function AccountOutwardPanel({ outwardId, outward, editable, docs
         otherPrefix={ACCOUNT_DOC_PREFIX}
         showSummary={false}
         title="Documents"
-        subtitle="One row for each reference document above. Every document except the Invoice is shared with the warehouse manager. E-way bill upload is required first when the PI amount is above ₹1,00,000."
+        subtitle="One row for each reference document above. Every document you upload, the Invoice included, is shared with the warehouse manager. E-way bill upload is required first when the PI amount is above ₹1,00,000."
       />
 
       <div className="flex flex-wrap items-center justify-end gap-3">

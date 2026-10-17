@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { needsSerials, serialKey } from "../features/outward/serialHelpers";
 import {
   ArrowLeft,
   Download,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast, promptName } from "../components/CenterMessage";
 import {
   fetchInwardById,
   uploadInwardDocument,
@@ -123,12 +124,12 @@ export default function InwardDetail() {
   // custom-named document. Picking a type immediately opens the file
   // picker for it; the chosen file uploads as soon as it's selected,
   // landing in the unified document list below as its own row.
-  const handleAddDocumentClick = (type, documents) => {
+  const handleAddDocumentClick = async (type, documents) => {
     setShowDocumentMenu(false);
 
     let label = type;
     if (type === "Other") {
-      const name = window.prompt("Enter document name");
+      const name = await promptName("Name this document", { label: "Document name", placeholder: "e.g. GST certificate" });
       if (!name?.trim()) return;
       label = name.trim();
     }
@@ -202,6 +203,18 @@ export default function InwardDetail() {
 
   const documents = inward.documents || [];
   const items = inward.items || [];
+  // Serial numbers shown with their item (rows with the same SKU share one list, split by quantity).
+  const serialsByRow = (() => {
+    const used = {};
+    return items.map((item) => {
+      if (!needsSerials(item)) return [];
+      const key = serialKey(item.category, item.sku);
+      const offset = used[key] || 0;
+      const quantity = Number(item.quantity) || 0;
+      used[key] = offset + quantity;
+      return (inward.serials || []).filter((x) => serialKey(x.category, x.sku) === key).slice(offset, offset + quantity);
+    });
+  })();
 
   const uploadedCategories = documents.map((doc) => String(doc.docCategory || "").trim().toLowerCase());
   const allDocumentsUploaded = REQUIRED_DOCUMENTS.every((requiredDocument) => {
@@ -269,11 +282,11 @@ export default function InwardDetail() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-4 space-y-4 sm:px-6 sm:py-6 sm:space-y-6">
-        <div className="bg-white rounded-xl border p-4 sm:p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Inward Information</h2>
+      <div className="max-w-7xl mx-auto px-3 py-3 space-y-3 sm:px-6 sm:py-6 sm:space-y-6">
+        <div className="bg-white rounded-xl border p-3 sm:p-6">
+          <h2 className="text-sm font-semibold text-gray-900 mb-3 sm:text-lg sm:mb-5">Inward Information</h2>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-3 sm:gap-5">
             <Info icon={<Hash size={18} />} label="GRN Number" value={inward.grnNumber || "-"} />
             <Info icon={<User size={18} />} label="Company" value={inward.companyName || inward.warehouse?.company?.name || "-"} />
             <Info icon={<User size={18} />} label="Supplier" value={inward.supplierName || "-"} />
@@ -298,8 +311,8 @@ export default function InwardDetail() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border p-4 sm:p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-5">Items</h2>
+        <div className="bg-white rounded-xl border p-3 sm:p-6">
+          <h2 className="text-sm font-semibold text-gray-900 mb-3 sm:text-lg sm:mb-5">Items</h2>
 
           <table className="w-full text-[11px] sm:text-sm">
             <thead>
@@ -312,15 +325,33 @@ export default function InwardDetail() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item, index) => (
-                <tr key={item.id || index} className="border-b last:border-0">
-                  <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
-                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
-                  <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
-                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
-                </tr>
-              ))}
+              {items.map((item, index) => {
+                const rowSerials = serialsByRow[index] || [];
+                return (
+                  <Fragment key={item.id || index}>
+                    <tr className={`${rowSerials.length ? "border-b-0" : "border-b"} last:border-0`}>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
+                      <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
+                      <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
+                      <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
+                    </tr>
+                    {rowSerials.length > 0 && (
+                      <tr className="border-b last:border-0">
+                        <td />
+                        <td colSpan={4} className="pb-3 px-1 sm:px-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-bold text-gray-900">SR. No -</span>
+                            {rowSerials.map((x) => (
+                              <span key={x.id || x.serialNo} className="rounded-md bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-medium text-blue-700 sm:text-xs">{x.serialNo}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               {items.length === 0 && (
                 <tr>
                   <td colSpan="5" className="text-center py-8 text-gray-500">
@@ -332,10 +363,10 @@ export default function InwardDetail() {
           </table>
         </div>
 
-        <div className="bg-white rounded-xl border p-4 sm:p-6">
-          <div className="mb-5 flex items-start justify-between gap-4">
+        <div className="bg-white rounded-xl border p-3 sm:p-6">
+          <div className="mb-3 flex items-start justify-between gap-3 sm:mb-5 sm:gap-4">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Documents</h2>
+              <h2 className="text-sm font-semibold text-gray-900 sm:text-lg">Documents</h2>
               <p className="text-sm text-gray-500 mt-1">{viewOnly ? "Download documents" : "Upload, download or delete required documents"}</p>
             </div>
 
@@ -388,7 +419,7 @@ export default function InwardDetail() {
               const isDeleting = document && docActionStatus[document.id] === "deleting";
 
               return (
-                <div key={key} className="border rounded-xl p-3 sm:p-4">
+                <div key={key} className="border rounded-lg p-2.5 sm:rounded-xl sm:p-4">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
                     <div className="flex items-center gap-2.5 min-w-0 sm:gap-3">
                       <div

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Calendar,
@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast, promptName } from "../components/CenterMessage";
 import {
   createInward,
   updateInward,
@@ -36,6 +36,8 @@ import useProducts from "../features/product/useProducts";
 import ItemProductFields, { ItemProductNotice } from "../components/ItemProductFields";
 import PartyNameField from "../components/PartyNameField";
 import { formatInwardType } from "../features/inward/inwardHelpers";
+import useSerialScanner from "../components/SerialScanner";
+import { buildSerialLines, initialSerialValues, serialPayload, serialProblem, needsSerials } from "../features/outward/serialHelpers";
 
 /*
  * Inward form:
@@ -176,12 +178,35 @@ export default function InwardForm() {
   const [showDocumentMenu, setShowDocumentMenu] = useState(false);
 
   const [items, setItems] = useState([createItem()]);
+  // Serial numbers: one box per Pcs unit (an item of 4 Pcs -> 4 serial numbers), scanned / typed per item.
+  const [serialValues, setSerialValues] = useState({});
+  const serialLines = useMemo(() => buildSerialLines(items), [items]);
+  const serialSig = JSON.stringify(serialLines.map((l) => [l.key, l.quantity]));
+  // Keep the boxes in step with the items: a changed quantity adds / drops boxes, a removed item drops its serials.
+  useEffect(() => {
+    setSerialValues((prev) => {
+      const next = {};
+      for (const line of serialLines) {
+        const old = prev[line.key] || [];
+        next[line.key] = Array.from({ length: line.quantity }, (_, i) => old[i] || { serialNo: "", source: "MANUAL" });
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serialSig]);
+  const serial = useSerialScanner({ items, lines: serialLines, values: serialValues, onChange: setSerialValues });
+  // Items that are filled in enough to take serial numbers (category + model + quantity, counted in Pcs).
+  const serialRows = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => needsSerials(item) && item.category && String(item.sku || "").trim() && Number(item.quantity) > 0);
+  // An entry saved before serial numbers existed (none saved) can still be edited without them.
+  const [hadNoSerials, setHadNoSerials] = useState(false);
 
   const [remarks, setRemarks] = useState("");
 
   const inputCls =
-    "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
-  const labelCls = "block text-sm font-semibold text-black mb-1.5";
+    "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 sm:py-2.5 focus:ring-blue-500 placeholder:text-gray-400";
+  const labelCls = "block text-xs font-semibold text-black mb-1 sm:text-sm sm:mb-1.5";
 
   const isSuperAdmin = user?.role === "SUPER_ADMIN";
   // Admins and warehouse managers can add a missing category / SKU right from the item row.
@@ -253,7 +278,10 @@ export default function InwardForm() {
         ? x.referenceDocuments
         : [{ refDocType: x.refDocType || "Invoice", refDocNumber: x.refDocNumber || "" }];
       setReferenceDocuments(refs.map((r) => ({ ...DEFAULT_REFERENCE(), refDocType: r.refDocType || "Invoice", refDocNumber: r.refDocNumber || "" })));
-      setItems((x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" })));
+      const loadedItems = (x.items || []).map((i) => ({ id: crypto.randomUUID(), category: i.category || "", companyName: i.companyName || "", sku: i.sku || "", quantity: String(i.quantity ?? ""), uom: i.uom || "Pcs" }));
+      setItems(loadedItems);
+      setSerialValues(initialSerialValues(buildSerialLines(loadedItems), x.serials || []));
+      setHadNoSerials(!(x.serials || []).length);
       setRemarks(x.remarks || "");
       if (Array.isArray(x.documents) && x.documents.length) {
         setDocuments(buildDocumentRows(x.documents));
@@ -352,13 +380,13 @@ export default function InwardForm() {
     );
   };
 
-  const addDocument = (type) => {
+  const addDocument = async (type) => {
     let name = type;
     if (type === "Vendor invoice") name = "Vendor invoice";
     if (type === "E-way bill") name = "E-way bill";
     if (type === "Unloading sign-off sheet") name = "Unloading sign-off sheet";
     if (type === "Other") {
-      name = window.prompt("Enter document name");
+      name = await promptName("Name this document", { label: "Document name", placeholder: "e.g. GST certificate" });
       if (!name?.trim()) return;
       name = name.trim();
     }
@@ -522,6 +550,14 @@ export default function InwardForm() {
       }
     }
 
+    // Every Pcs unit needs its own serial number (an item of 5 Pcs needs 5).
+    const noSerialsEntered = serialPayload(serialLines, serialValues).length === 0;
+    const serialError = isEdit && hadNoSerials && noSerialsEntered ? null : serialProblem(serialLines, serialValues);
+    if (serialError) {
+      toast.error(serialError);
+      return;
+    }
+
     if (!warehouseId) {
       toast.error("Please select a warehouse for the selected company.");
       return;
@@ -570,6 +606,8 @@ export default function InwardForm() {
         quantity: Number(item.quantity),
         uom: item.uom,
       })),
+
+      serials: serialPayload(serialLines, serialValues),
     };
 
     const result = isEdit
@@ -654,9 +692,9 @@ export default function InwardForm() {
   };
 
   return (
-    <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
+    <div className="min-h-dvh bg-gray-50 px-3 py-4 sm:px-4 sm:py-6 md:px-6">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6 flex items-center gap-3">
+        <div className="mb-4 flex items-center gap-3 sm:mb-6">
           <button
             type="button"
             onClick={() => navigate(-1)}
@@ -675,27 +713,27 @@ export default function InwardForm() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-5">
           {/* Company / Warehouse context — only Super Admin can select these. */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
+          <div className="rounded-2xl border border-gray-200 bg-white p-3 sm:p-5 md:p-6">
             <h2 className="mb-4 text-sm font-semibold text-gray-900">Company & Warehouse</h2>
             {isSuperAdmin ? (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
                 <div><label className={labelCls}>Company</label><div className="relative"><select value={selectedCompanyId} onChange={(e) => { const id = e.target.value; const company = topCompanyOptions.find((c) => c.id === id); setSelectedCompanyId(id); setCompanyName(company?.name || ""); dispatch(setSelectedWarehouse(null)); }} className={`${inputCls} appearance-none bg-white`}><option value="">Select company</option>{topCompanyOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select><ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /></div></div>
                 <div><label className={labelCls}>Warehouse</label><div className="relative"><select value={selectedWarehouse?.id || ""} disabled={!selectedCompanyId} onChange={(e) => { const warehouse = companyWarehouses.find((w) => w.id === e.target.value); dispatch(setSelectedWarehouse(warehouse || null)); }} className={`${inputCls} appearance-none bg-white disabled:bg-gray-100 disabled:text-gray-400`}><option value="">{selectedCompanyId ? "Select warehouse" : "Select company first"}</option>{companyWarehouses.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.code})</option>)}</select><ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" /></div></div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className={labelCls}>Company</label><div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">{selectedWarehouse?.company?.name || "Assigned company"}</div></div><div><label className={labelCls}>Warehouse</label><div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">{selectedWarehouse?.name || "Assigned warehouse"}</div></div></div>
+              <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2"><div><label className={labelCls}>Company</label><div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">{selectedWarehouse?.company?.name || "Assigned company"}</div></div><div><label className={labelCls}>Warehouse</label><div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-700">{selectedWarehouse?.name || "Assigned warehouse"}</div></div></div>
             )}
           </div>
 
           {/* Inward details */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
+          <div className="rounded-2xl border border-gray-200 bg-white p-3 sm:p-5 md:p-6">
             <h2 className="mb-4 text-sm font-semibold text-gray-900">
               Inward details
             </h2>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-3">
               <div>
                 <label className={labelCls}>Inward date and time</label>
                 <div className="relative">
@@ -724,6 +762,7 @@ export default function InwardForm() {
                     <option>Purchase - Service Stock</option>
                     <option>Return of Purchase</option>
                     <option>Service/Faulty Stock from Customer</option>
+                    <option>Repair-Service Stock</option>
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 </div>
@@ -783,7 +822,7 @@ export default function InwardForm() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2">
                     <div>
                       <label className={labelCls}>Reference doc type</label>
                       <div className="relative">
@@ -834,10 +873,11 @@ export default function InwardForm() {
          
 
           {/* Item details */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 mt-6 md:p-6">
+          <div className="rounded-2xl border border-gray-200 bg-white p-3 mt-3 sm:p-5 sm:mt-6 md:p-6">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-900">
+              <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-gray-900">
                 Item details
+                {serial.badge}
               </h2>
 
               <button
@@ -875,7 +915,7 @@ export default function InwardForm() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-12">
+                  <div className="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 md:grid-cols-12">
                     <ItemProductFields
                       item={item}
                       products={products}
@@ -922,14 +962,34 @@ export default function InwardForm() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Serial numbers: only the SR. No box + Add + Scan, then the numbers entered (no item table). */}
+                  {needsSerials(item) && item.category && String(item.sku || "").trim() && (
+                    <div className="mt-3 border-t border-gray-200 pt-3">
+                      {Number(item.quantity) > 0 ? (
+                        <>
+                          {serial.inputCell(item, index, true)}
+                          <table className="w-full"><tbody>{serial.listRow(item, index, 1)}</tbody></table>
+                        </>
+                      ) : (
+                        <p className="text-xs text-gray-400">Enter the quantity to add serial numbers.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
+            {serialRows.length > 0 && (
+              <p className="mt-2 text-xs text-gray-500">
+                Every Pcs unit needs a serial no.: an item of 5 Pcs needs 5. Type the serial no. and press Enter / Add, tap Scan for the camera, or scan with a connected Bluetooth / Wi-Fi / USB scanner.
+              </p>
+            )}
+            {serial.camera}
           </div>
 
           {/* Documents */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 mt-6 md:p-6">
-            <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="rounded-2xl border border-gray-200 bg-white p-3 mt-3 sm:p-5 sm:mt-6 md:p-6">
+            <div className="mb-3 flex items-start justify-between gap-3 sm:mb-5 sm:gap-4">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">Documents</h2>
                 <p className="mt-1 text-xs text-gray-400">Upload documents if available. Documents are optional.</p>
@@ -975,13 +1035,13 @@ export default function InwardForm() {
                 const rowDownloading = doc.documentId && docActionStatus[doc.documentId] === "downloading";
 
                 return (
-                  <div key={doc.id} className="flex min-h-[104px] flex-col gap-3 rounded-2xl border border-gray-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-5">
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gray-100">
+                  <div key={doc.id} className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-white px-3 py-3 sm:min-h-[104px] sm:gap-3 sm:rounded-2xl sm:px-5 sm:py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-3 sm:gap-5">
+                      <div className="flex h-10 w-10 shrink-0 sm:h-14 sm:w-14 items-center justify-center rounded-xl bg-gray-100">
                         <FileText size={28} strokeWidth={1.7} className="text-gray-400" />
                       </div>
                       <div className="min-w-0">
-                        <p className="text-base font-semibold text-gray-900 md:text-lg">{doc.name || doc.type}</p>
+                        <p className="text-sm font-semibold text-gray-900 sm:text-base md:text-lg">{doc.name || doc.type}</p>
                         {doc.file && (
                           <p className="mt-1 truncate text-xs text-green-600">Selected: {doc.file.name}</p>
                         )}
@@ -992,7 +1052,7 @@ export default function InwardForm() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
-                      <label className="flex h-12 cursor-pointer items-center gap-2 rounded-xl border border-blue-300 bg-white px-4 text-sm font-semibold text-blue-700 hover:bg-blue-50">
+                      <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-blue-300 bg-white px-3 text-xs sm:h-12 sm:rounded-xl sm:px-4 sm:text-sm font-semibold text-blue-700 hover:bg-blue-50">
                         <Upload size={18} />
                         {rowUploading ? "Uploading..." : doc.existing || doc.file ? "Replace" : "Upload document"}
                         <input
@@ -1013,7 +1073,7 @@ export default function InwardForm() {
                           title="Download"
                           disabled={rowDownloading}
                           onClick={() => handleDownloadDocument(doc.documentId)}
-                          className="flex h-12 items-center justify-center rounded-xl border border-gray-200 px-3 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                          className="flex h-9 items-center justify-center rounded-lg sm:h-12 sm:rounded-xl border border-gray-200 px-3 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
                         >
                           <Download size={18} />
                         </button>
@@ -1025,7 +1085,7 @@ export default function InwardForm() {
                           title="Delete"
                           disabled={rowDeleting}
                           onClick={() => handleDeleteDocument(doc.id)}
-                          className="flex h-12 items-center justify-center rounded-xl border border-red-200 px-3 text-red-500 hover:bg-red-50 disabled:opacity-50"
+                          className="flex h-9 items-center justify-center rounded-lg sm:h-12 sm:rounded-xl border border-red-200 px-3 text-red-500 hover:bg-red-50 disabled:opacity-50"
                         >
                           <Trash2 size={18} />
                         </button>
@@ -1038,7 +1098,7 @@ export default function InwardForm() {
           </div>
 
           {/* Remarks */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 mt-6 md:p-6">
+          <div className="rounded-2xl border border-gray-200 bg-white p-3 mt-3 sm:p-5 sm:mt-6 md:p-6">
             <label className={labelCls}>Receiving remarks</label>
             <textarea
               rows={3}
@@ -1076,7 +1136,7 @@ export default function InwardForm() {
 // } from "lucide-react";
 // import { useNavigate, useParams } from "react-router-dom";
 // import { useDispatch, useSelector } from "react-redux";
-// import { toast } from "react-toastify";
+// import { toast } from "../components/CenterMessage";
 // import {
 //   createInward,
 //   updateInward,

@@ -166,6 +166,7 @@ model Grn {
   createdAt DateTime @default(now())
 
   items              GrnItem[]
+  serials            GrnSerial[]
   referenceDocuments GrnReferenceDocument[]
 
   @@index([warehouseId])
@@ -181,6 +182,7 @@ model GrnItem {
   sku         String
   quantity    Int
   uom         String
+ 
 
   grn Grn @relation(fields: [grnId], references: [id], onDelete: Cascade)
 
@@ -431,4 +433,22 @@ model MinSerial {
   @@unique([minId, serialNo])
   @@index([serialNo])
   @@index([minId, category, sku])
+}
+
+model GrnSerial {
+  id String @id @default(uuid())
+
+  grnId String
+  grn   Grn    @relation(fields: [grnId], references: [id], onDelete: Cascade)
+
+  // Stored per category + SKU (not per GrnItem row), because editing an entry rewrites its item rows.
+  category  String
+  sku       String
+  serialNo  String
+  source    String   @default("MANUAL") // MANUAL | CAMERA | SCANNER
+  createdAt DateTime @default(now())
+
+  @@unique([grnId, serialNo])
+  @@index([serialNo])
+  @@index([grnId, category, sku])
 }

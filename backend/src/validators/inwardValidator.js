@@ -5,6 +5,7 @@ export const INWARD_TYPES = [
   'Purchase - Service Stock',
   'Return of Purchase',
   'Service/Faulty Stock from Customer',
+  'Repair-Service Stock',
 ];
 
 // Older entries / clients may still send the previous label.

@@ -26,7 +26,7 @@ export const MANAGER_REF_TYPES = ["Delivery Challan", "Return Note", "Bilty", "O
 // No account document is compulsory to upload: each reference type chosen just gets its own (optional)
 // row in the Documents section. Only the e-way bill is needed above EWAY_BILL_THRESHOLD (number OR document).
 export const ACCOUNT_REQUIRED_DOCUMENTS = [];
-export const refTypeLabel = (type) => (type === "Other (Accounts)" ? "Other" : type);
+export const refTypeLabel = (type) => (type === "Other (Accounts)" ? "Other" : type === "Without Invoice" ? "Invoice without amount" : type);
 // The document row each reference type opens in the Documents section.
 // Warehouse manager types open their own row too: choose Bilty -> a Bilty row to upload, and so on.
 const REF_TYPE_DOCUMENT = {
@@ -68,7 +68,8 @@ export const isAccountRef = (ref) => ACCOUNT_REF_OWNED.some((t) => sameText(t, r
 export const isManagerRef = (ref) => !isAccountRef(ref);
 export const isAccountDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
 // "Accounts other - GST certificate" -> "Other - GST certificate"
-export const docLabel = (category) => String(category || "Document").replace(/^accounts other/i, "Other");
+export const docLabel = (category) =>
+  String(category || "Document").replace(/^accounts other/i, "Other").replace(/^without[ -]?invoice/i, "Invoice without amount");
 
 // Account may add / replace / delete its documents until the entry is dispatched.
 // Only while approved + waiting for dispatch, and only once the warehouse manager has submitted the transportation form.
@@ -110,11 +111,11 @@ export const TRANSPORT_MODES = [
 export const transportModeLabel = (value) => TRANSPORT_MODES.find((m) => m.value === value)?.label || "";
 // Dispatch mode picked on the transportation form (optional).
 export const DISPATCH_MODES = ["By Road", "Courier", "Customer Pickup"];
-// Account documents that release the entry to the warehouse manager: all except the Invoice, which stays with Account.
-export const isReleaseDocCategory = (category) => /^(e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
+// Every account document (Invoice included) is shared with the warehouse manager and releases the entry to them.
+export const isReleaseDocCategory = (category) => /^(invoice|e-?way|dc[ -]?challan|without[ -]?invoice|accounts other)/i.test(String(category || "").trim());
 export const isInvoiceDocCategory = (category) => /^invoice/i.test(String(category || "").trim());
-// Account reference types that release the entry: everything except the Invoice (an Invoice alone stays internal).
-export const isReleaseRefType = (type) => Boolean(String(type || "").trim()) && !/^invoice/i.test(String(type).trim());
+// Every account reference type (Invoice included) releases the entry to the warehouse manager.
+export const isReleaseRefType = (type) => Boolean(String(type || "").trim());
 
 const totalCostOf = (items) => items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
 
@@ -133,11 +134,9 @@ export function formatOutwardType(type) {
   if (lower.includes("service")) {
     return "Service - Stock Out";
   }
-  if (lower.includes("return") && lower.includes("vendor")) {
-    return "Return to Vendor";
-  }
-  if (lower.includes("return")) {
-    return "Return to Vendor";
+  // "Return to Vendor" was renamed "Replacement"; entries saved with the old name show the new one.
+  if (lower.includes("replacement") || lower.includes("return")) {
+    return "Replacement";
   }
   if (lower.includes("damage") || lower.includes("scrap")) {
     return "Damage / Scrap Out";
@@ -311,3 +310,12 @@ export const formatMoney = (value) =>
 
 export const totalCost = (items = []) =>
   items.reduce((sum, i) => sum + (Number(i.cost) || 0), 0);
+
+// Which inward types an outward type's serial numbers can be scanned from (the server enforces the same rule).
+export const SERIAL_SOURCE_TYPES = {
+  "Sale - Stock Out": ["Purchase - New Stock", "Return of Purchase"],
+  "Service - Stock Out": ["Purchase - New Stock", "Service/Faulty Stock from Customer"],
+  "Service - Stock Out to Customer": ["Purchase - New Stock", "Service/Faulty Stock from Customer"],
+  Replacement: ["Purchase - Service Stock", "Repair-Service Stock"],
+  "Damage / Scrap Out": ["Service/Faulty Stock from Customer"],
+};

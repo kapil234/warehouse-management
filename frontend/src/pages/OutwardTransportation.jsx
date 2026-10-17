@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Loader2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast } from "../components/CenterMessage";
 import {
   fetchOutwardById,
   saveOutwardTransportation,
@@ -11,7 +11,10 @@ import {
   selectOutwardDetailStatus,
   selectOutwardDetailError,
 } from "../features/outward/outwardSlice";
-import { TRANSPORT_MODES, DISPATCH_MODES, isTransportSubmitted } from "../features/outward/outwardHelpers";
+import { TRANSPORT_MODES, DISPATCH_MODES, isTransportSubmitted, formatOutwardType, SERIAL_SOURCE_TYPES } from "../features/outward/outwardHelpers";
+import useSerialScanner from "../components/SerialScanner";
+import apiClient from "../services/apiClient";
+import { buildSerialLines, initialSerialValues, serialPayload, serialProblem } from "../features/outward/serialHelpers";
 
 /**
  * =========================================================
@@ -22,7 +25,8 @@ import { TRANSPORT_MODES, DISPATCH_MODES, isTransportSubmitted } from "../featur
  *   Dedicated vehicle -> Vehicle no. + Driver name + Driver contact
  *   Transportation    -> Transporter ID + Transporter name
  *
- * Submitting it sends the details to the account team, who can then upload Invoice / E-way bill /
+ * The same form has the Item details with the serial no. scan: one serial number for every Pcs unit
+ * (typed, camera or scanner). Submitting sends the vehicle details AND the serial numbers to the account team, who can then upload Invoice / E-way bill /
  * DC Challan / Without Invoice / Other. Can be corrected until the entry is dispatched.
  * =========================================================
  */
@@ -48,6 +52,29 @@ export default function OutwardTransportation() {
   const [transporterContact, setTransporterContact] = useState("");
   const [saving, setSaving] = useState(false);
   const [filled, setFilled] = useState(false);
+  // Serial numbers: one box per Pcs unit (an item of 4 Pcs -> 4 serial numbers).
+  const [serialValues, setSerialValues] = useState({});
+  const serialsInitFor = useRef(null);
+  const locked = Boolean(outward?.transportLocked);
+  const serialLines = useMemo(() => buildSerialLines(outward?.items || []), [outward?.items]);
+  // Load saved serial numbers once per entry (a later refresh must not wipe what is being scanned).
+  useEffect(() => {
+    if (!outward || outward.id !== id || serialsInitFor.current === id) return;
+    serialsInitFor.current = id;
+    setSerialValues(initialSerialValues(buildSerialLines(outward.items || []), outward.serials || []));
+  }, [outward, id]);
+  // Serial numbers in stock that can be chosen for each item (same inward-type rule the server enforces on submit).
+  const [stockSerials, setStockSerials] = useState(null);
+  useEffect(() => {
+    if (!outward || outward.id !== id || locked) return undefined;
+    let cancelled = false;
+    apiClient
+      .get(`/api/outward/${id}/available-serials`)
+      .then(({ data }) => { if (!cancelled) setStockSerials(data?.data || {}); })
+      .catch(() => { if (!cancelled) setStockSerials(null); }); // no list: typing / scanning still works
+    return () => { cancelled = true; };
+  }, [outward?.id, id, locked]);
+  const serial = useSerialScanner({ items: outward?.items || [], lines: serialLines, values: serialValues, onChange: setSerialValues, disabled: locked, suggestions: stockSerials });
 
   const inputCls = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400";
   const labelCls = "block text-sm font-semibold text-black mb-1.5";
@@ -97,14 +124,25 @@ export default function OutwardTransportation() {
       if (!PHONE_RE.test(transporterContact.trim())) return toast.error("Please enter a transporter contact number (10 digits).");
     }
 
+    // Every Pcs unit needs its own serial number. Entries submitted before serial numbers moved to this form
+    // can still be corrected without them (but if some are entered, all must be).
+    const serials = serialPayload(serialLines, serialValues);
+    const legacyNoSerials = isTransportSubmitted(outward) && !(outward.serials || []).length && serials.length === 0;
+    if (!legacyNoSerials) {
+      const problem = serialProblem(serialLines, serialValues);
+      if (problem) return toast.error(problem);
+    }
+
     setSaving(true);
     const result = await dispatch(
       saveOutwardTransportation({
         id,
-        payload:
-          mode === "DEDICATED"
+        payload: {
+          ...(mode === "DEDICATED"
             ? { transportMode: mode, dispatchMode, vehicleNumber: vehicleNumber.trim(), driverName: driverName.trim(), driverContact: driverContact.trim() }
-            : { transportMode: mode, dispatchMode, transporterId: transporterId.trim(), transporterName: transporterName.trim(), transporterContact: transporterContact.trim() },
+            : { transportMode: mode, dispatchMode, transporterId: transporterId.trim(), transporterName: transporterName.trim(), transporterContact: transporterContact.trim() }),
+          ...(legacyNoSerials ? {} : { serials }),
+        },
       })
     );
     setSaving(false);
@@ -134,8 +172,7 @@ export default function OutwardTransportation() {
   }
 
   const submitted = isTransportSubmitted(outward);
-  // Frozen for everyone once Account has uploaded its documents (the server refuses changes too).
-  const locked = Boolean(outward.transportLocked);
+  const items = outward.items || [];
 
   return (
     <div className="min-h-dvh bg-gray-50 px-4 py-6 md:px-6">
@@ -198,11 +235,56 @@ export default function OutwardTransportation() {
             </div>
             {!locked && (
               <p className="mt-4 text-xs text-gray-500">
-                After you submit, the details go to the account team. Once the account team uploads its documents, these details can no longer be changed.
+                After you submit, the details and the serial numbers go to the account team. Once the account team uploads its documents, these details can no longer be changed.
+              </p>
+            )}
+          </section>
+
+          <section className="mt-5 rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">Item details</h2>
+              {serial.badge}
+            </div>
+            <div className="rounded-lg border">
+              <table className="w-full text-xs sm:text-sm">
+                <thead>
+                  <tr className="border-b bg-gray-50 text-left text-gray-500">
+                    <th className="px-1.5 py-2 sm:px-3">#</th>
+                    <th className="px-1.5 py-2 sm:px-3">Category</th>
+                    <th className="px-1.5 py-2 sm:px-3">Model</th>
+                    <th className="px-1.5 py-2 sm:px-3">Qty</th>
+                    <th className="px-1.5 py-2 sm:px-3">UOM</th>
+                    {serial.hasSerials && <th className="hidden px-3 py-2 sm:table-cell">SR. No</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item, index) => (
+                    <Fragment key={item.id || index}>
+                      <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-sm last:border-0 ${serial.rowProps(index).className}`}>
+                        <td className="px-1.5 py-3 sm:px-3 sm:py-2">{index + 1}</td>
+                        <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.category || "-"}</td>
+                        <td className="break-words px-1.5 py-3 font-medium sm:whitespace-nowrap sm:px-3 sm:py-2">{item.sku || "-"}</td>
+                        <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.quantity}</td>
+                        <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.uom || "-"}</td>
+                        {serial.hasSerials && <td className="hidden px-3 py-1 align-middle sm:table-cell">{serial.inputCell(item, index)}</td>}
+                      </tr>
+                      {serial.hasSerials && serial.mobileInputRow(item, index, 5 + 1)}
+                      {serial.hasSerials && serial.listRow(item, index, 5 + 1)}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {serial.hasSerials && !locked && <p className="mt-2 text-xs text-gray-500">Tap an item row to select it, then type the serial no. and press Enter / Add, tap Scan for the camera, or scan with a connected Bluetooth / Wi-Fi / USB scanner. Scans go only to the selected item and are listed under it. The serial numbers are sent to the account team when you submit.</p>}
+            {serial.hasSerials && !locked && SERIAL_SOURCE_TYPES[formatOutwardType(outward.outwardType)] && (
+              <p className="mt-1 text-xs font-medium text-gray-700">
+                {formatOutwardType(outward.outwardType)}: serial numbers must have come in through {SERIAL_SOURCE_TYPES[formatOutwardType(outward.outwardType)].join(" or ")}.
               </p>
             )}
           </section>
           </fieldset>
+
+          {serial.camera}
 
           {!locked && <button type="submit" disabled={saving} className="w-full rounded-lg bg-gray-900 py-3 text-sm font-semibold text-white hover:bg-black disabled:opacity-40">
             {saving ? "Saving..." : submitted ? "Update transportation details" : "Submit to account team"}

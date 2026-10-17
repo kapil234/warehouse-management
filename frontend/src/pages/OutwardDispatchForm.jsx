@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronDown, Download, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast, promptName } from "../components/CenterMessage";
 import {
   fetchOutwardById,
   dispatchOutward,
@@ -122,9 +122,9 @@ export default function OutwardDispatchForm() {
     });
   };
 
-  const addExtraDocument = () => {
+  const addExtraDocument = async () => {
     setShowDocumentMenu(false);
-    const name = window.prompt("Enter document name")?.trim();
+    const name = (await promptName("Name this document", { label: "Document name", placeholder: "e.g. GST certificate" }))?.trim();
     if (!name) return;
     if (documentRows.some((row) => row.label.toLowerCase() === name.toLowerCase())) return toast.info("That document is already in the list.");
     setExtraDocNames((p) => [...p, name]);

@@ -9,6 +9,7 @@ import {
   holdOutward,
   dispatchOutward,
   saveTransportation,
+  getAvailableSerials,
   saveReceiving,
   saveAccountDocuments,
   downloadItemProof,
@@ -17,6 +18,7 @@ import {
   listOutwardStock,
   createOutwardModel,
   listOutwardCompanies,
+  listOutwardCustomers,
   createOutwardCompany,
   listOutwardHistory,
 } from "../controllers/outwardController.js";
@@ -30,10 +32,10 @@ import { upload } from "../middleware/uploadMiddleware.js";
  *
  *   SALES              creates / edits (PI details + payment status, UTR / proof)  -> PENDING_APPROVAL
  *   ACCOUNT            approves, holds or rejects the entry  -> PENDING_DISPATCH / ON_HOLD / REJECTED
- *   WAREHOUSE_MANAGER  fills the TRANSPORTATION form (dedicated vehicle OR transporter)   - opens after approval
+ *   WAREHOUSE_MANAGER  fills the TRANSPORTATION form (dedicated vehicle OR transporter + serial numbers) - opens after approval
  *   ACCOUNT            then uploads Invoice / E-way bill / DC Challan / Without Invoice / Other (locked until transportation is in).
- *                      Invoice is never shared; any other document opens the dispatch form.
- *   WAREHOUSE_MANAGER  fills the DISPATCH form (vehicle read-only, references, documents, serial scan)  -> DISPATCHED
+ *                      Every document (Invoice included) is shared; any document opens the dispatch form.
+ *   WAREHOUSE_MANAGER  fills the DISPATCH form (vehicle read-only, references, documents)  -> DISPATCHED
  *   WAREHOUSE_MANAGER  then fills the receiving details (date, receiver, receiving copy)
  *   SUPER_ADMIN        can do every step
  *
@@ -50,6 +52,7 @@ router.get("/models", listOutwardModels);
 router.get("/stock", listOutwardStock);
 router.post("/models", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), createOutwardModel);
 router.get("/companies", listOutwardCompanies);
+router.get("/customers", listOutwardCustomers);
 router.post("/companies", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), createOutwardCompany);
 // Must stay above "/:id" or "/history" would be matched as an id.
 router.get("/history", listOutwardHistory);
@@ -70,6 +73,8 @@ router.post("/:id/hold", authorize("SUPER_ADMIN", "ACCOUNT"), holdOutward);
 // Warehouse manager fills the transportation form (dedicated vehicle OR transporter) after Account's approval.
 // Submitting it unlocks the document upload for the account team.
 router.put("/:id/transportation", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), saveTransportation);
+// Serial numbers in stock that can be scanned for this entry (dropdown on the transportation form).
+router.get("/:id/available-serials", authorize("SUPER_ADMIN", "WAREHOUSE_MANAGER"), getAvailableSerials);
 
 // Warehouse manager fills the dispatch form (opens once Account has shared a non-Invoice document).
 // Accepts JSON, or multipart (payload + files + categories) so the documents travel with the dispatch.

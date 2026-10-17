@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Download,
@@ -18,7 +18,7 @@ import {
 import { Link } from "react-router-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast } from "../components/CenterMessage";
 import {
   fetchOutwardById,
   approveOutward,
@@ -52,6 +52,7 @@ import {
   isAccountDocCategory,
   refTypeLabel,
 } from "../features/outward/outwardHelpers";
+import { needsSerials, serialKey } from "../features/outward/serialHelpers";
 import { downloadOutwardPdf } from "../features/outward/outwardPdf";
 import OutwardDocuments from "../components/OutwardDocuments";
 import AccountOutwardPanel from "../components/AccountOutwardPanel";
@@ -184,6 +185,18 @@ export default function OutwardDetail() {
 
   const documents = outward.documents || [];
   const items = outward.items || [];
+  // Serial numbers shown with their item (rows with the same SKU share one list, split by quantity).
+  const serialsByRow = (() => {
+    const used = {};
+    return items.map((item) => {
+      if (!needsSerials(item)) return [];
+      const key = serialKey(item.category, item.sku);
+      const offset = used[key] || 0;
+      const quantity = Number(item.quantity) || 0;
+      used[key] = offset + quantity;
+      return (outward.serials || []).filter((x) => serialKey(x.category, x.sku) === key).slice(offset, offset + quantity);
+    });
+  })();
 
   // Warehouse managers only get "Pending" / "Dispatched" (dispatchState);
   // everyone else gets the real workflow status.
@@ -483,15 +496,33 @@ export default function OutwardDetail() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item, index) => (
-                <tr key={item.id || index} className="border-b last:border-0">
-                  <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
-                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
-                  <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
-                  <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
-                  <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
-                </tr>
-              ))}
+              {items.map((item, index) => {
+                const rowSerials = serialsByRow[index] || [];
+                return (
+                  <Fragment key={item.id || index}>
+                    <tr className={`${rowSerials.length ? "border-b-0" : "border-b"} last:border-0`}>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">{index + 1}</td>
+                      <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.category || "-"}</td>
+                      <td className="py-2 px-1 break-words font-medium sm:py-4 sm:px-3">{item.sku || "-"}</td>
+                      <td className="py-2 px-1 sm:py-4 sm:px-3">{item.quantity || 0}</td>
+                      <td className="py-2 px-1 break-words sm:py-4 sm:px-3">{item.uom || "-"}</td>
+                    </tr>
+                    {rowSerials.length > 0 && (
+                      <tr className="border-b last:border-0">
+                        <td />
+                        <td colSpan={4} className="pb-3 px-1 sm:px-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-bold text-gray-900">SR. No -</span>
+                            {rowSerials.map((x) => (
+                              <span key={x.id || x.serialNo} className="rounded-md bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-medium text-blue-700 sm:text-xs">{x.serialNo}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               {items.length === 0 && (
                 <tr>
                   <td colSpan={5} className="text-center py-8 text-gray-500">
@@ -536,25 +567,6 @@ export default function OutwardDetail() {
             </div>
           );
         })()}
-
-        {Array.isArray(outward.serials) && outward.serials.length > 0 && (
-          <div className="bg-white rounded-xl border p-4 sm:p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-4 sm:text-lg sm:mb-5">Serial numbers</h2>
-            <div className="space-y-4">
-              {[...new Set(outward.serials.map((s) => `${s.category}||${s.sku}`))].map((groupKey) => {
-                const group = outward.serials.filter((s) => `${s.category}||${s.sku}` === groupKey);
-                return (
-                  <div key={groupKey}>
-                    <p className="mb-2 text-sm font-medium text-gray-900">{group[0].sku} <span className="text-xs font-normal text-gray-500">({group[0].category}) · {group.length} Pcs</span></p>
-                    <div className="flex flex-wrap gap-2">
-                      {group.map((s) => <span key={s.id || s.serialNo} className="rounded-md bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800">{s.serialNo}</span>)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Account: its own reference documents + documents (invoice / e-way bill / other), editable until dispatch. */}
         {showAccountPanel && (

@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Loader2, Paperclip, Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast } from "../components/CenterMessage";
 import {
   fetchOutwardById,
   dispatchOutward,
@@ -15,8 +15,6 @@ import {
 } from "../features/outward/outwardSlice";
 import { STAGE, DISPATCH_MODES, transportModeLabel, isTransportSubmitted, isReceivingDocCategory, isPlaceholder, paymentStatusLabel, refTypeLabel, refTypeDocument, REQUIRED_DOCUMENTS, MANAGER_REF_TYPES, isAccountRef, isManagerRef, isAccountDocCategory } from "../features/outward/outwardHelpers";
 import OutwardDocuments from "../components/OutwardDocuments";
-import useSerialScanner from "../components/SerialScanner";
-import { buildSerialLines, initialSerialValues, serialPayload, serialProblem } from "../features/outward/serialHelpers";
 
 import LocationLink from "../components/LocationLink";
 /**
@@ -33,7 +31,7 @@ import LocationLink from "../components/LocationLink";
  *
  * Driver name / contact are part of the dispatch details. Every reference document type chosen
  * (Delivery Challan, Return Note, Bilty, Other) opens its own row in the Documents section to upload.
- * After the first dispatch the manager is taken to the receiving details form.
+ * After dispatch the manager is taken to the outward details page.
  * =========================================================
  */
 
@@ -72,9 +70,6 @@ export default function OutwardDispatch() {
   const [stagedDocs, setStagedDocs] = useState([]);
   const submittingRef = useRef(false); // stops the "already dispatched" redirect firing during our own save
   const [filled, setFilled] = useState(false);
-  // Serial numbers: one box per Pcs unit (an item of 4 Pcs -> 4 serial numbers).
-  const [serialValues, setSerialValues] = useState({});
-  const serialsInitFor = useRef(null);
   // Super admin can reject from here (reason required); it then shows Approve again on the details page.
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -132,14 +127,6 @@ export default function OutwardDispatch() {
   const alreadyDispatched = outward?.dispatchState === "Dispatched" || ["DISPATCHED", "DELIVERED"].includes(outward?.workflowStatus);
   const superAdmin = isSuperAdminUser();
 
-  const serialLines = useMemo(() => buildSerialLines(outward?.items || []), [outward?.items]);
-  // Load saved serial numbers once per entry (later refreshes, e.g. a document upload, must not wipe what is being scanned).
-  useEffect(() => {
-    if (!outward || outward.id !== id || serialsInitFor.current === id) return;
-    serialsInitFor.current = id;
-    setSerialValues(initialSerialValues(buildSerialLines(outward.items || []), outward.serials || []));
-  }, [outward, id]);
-  const serial = useSerialScanner({ items: outward?.items || [], lines: serialLines, values: serialValues, onChange: setSerialValues });
 
   // After dispatch the Super admin uses Update (the full edit form, dispatch details included).
   // The warehouse manager stays here and can keep updating the dispatch details.
@@ -200,15 +187,6 @@ export default function OutwardDispatch() {
       if (driverContact.trim() && !PHONE_RE.test(driverContact.trim())) return toast.error("Please enter a driver contact number (10 digits).");
     }
 
-    // Every Pcs unit needs its own serial number. Entries dispatched before serial numbers existed
-    // can still be updated without them (but if some are entered, all must be).
-    const serials = serialPayload(serialLines, serialValues);
-    const legacyDispatched = alreadyDispatched && !(outward.serials || []).length && serials.length === 0;
-    if (!legacyDispatched) {
-      const problem = serialProblem(serialLines, serialValues);
-      if (problem) return toast.error(problem);
-    }
-
     setSaving(true);
     submittingRef.current = true;
 
@@ -227,7 +205,6 @@ export default function OutwardDispatch() {
           }),
           remarks: remarks.trim() || undefined,
           referenceDocuments: refs,
-          ...(legacyDispatched ? {} : { serials }),
         },
       })
     );
@@ -239,12 +216,12 @@ export default function OutwardDispatch() {
     }
     if (alreadyDispatched) {
       toast.success("Dispatch details updated.");
-      navigate("/outward", { replace: true });
+      navigate(`/outward/${id}`, { replace: true });
       return;
     }
-    // First dispatch: go straight on to the receiving details form.
-    toast.success("Dispatched successfully. Please fill the receiving details.");
-    navigate(`/outward/${id}/receiving`, { replace: true });
+    // Dispatched: open the outward details page (the Delivered / receiving form stays available from there).
+    toast.success("Dispatched successfully.");
+    navigate(`/outward/${id}`, { replace: true });
   };
 
   if (detailStatus === "loading" || (detailStatus === "idle" && !outward) || (outward && outward.id !== id)) {
@@ -431,44 +408,6 @@ export default function OutwardDispatch() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-gray-900">Item details</h2>
-              {serial.badge}
-            </div>
-            <div className="rounded-lg border">
-              <table className="w-full text-xs sm:text-sm">
-                <thead>
-                  <tr className="border-b bg-gray-50 text-left text-gray-500">
-                    <th className="px-1.5 py-2 sm:px-3">#</th>
-                    <th className="px-1.5 py-2 sm:px-3">Category</th>
-                    <th className="px-1.5 py-2 sm:px-3">Model</th>
-                    <th className="px-1.5 py-2 sm:px-3">Qty</th>
-                    <th className="px-1.5 py-2 sm:px-3">UOM</th>
-                    {serial.hasSerials && <th className="hidden px-3 py-2 sm:table-cell">SR. No</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item, index) => (
-                    <Fragment key={item.id || index}>
-                    <tr {...serial.rowProps(index)} className={`${serial.hasSerials ? "border-b-0 sm:border-b" : "border-b"} text-sm last:border-0 ${serial.rowProps(index).className}`}>
-                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{index + 1}</td>
-                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.category || "-"}</td>
-                      <td className="break-words px-1.5 py-3 font-medium sm:whitespace-nowrap sm:px-3 sm:py-2">{item.sku || "-"}</td>
-                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.quantity}</td>
-                      <td className="px-1.5 py-3 sm:px-3 sm:py-2">{item.uom || "-"}</td>
-                      {serial.hasSerials && <td className="hidden px-3 py-1 align-middle sm:table-cell">{serial.inputCell(item, index)}</td>}
-                    </tr>
-                    {serial.hasSerials && serial.mobileInputRow(item, index, 5 + 1)}
-                    {serial.hasSerials && serial.listRow(item, index, 5 + 1)}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {serial.hasSerials && <p className="mt-2 text-xs text-gray-500">Tap an item row to select it, then type the serial no. and press Enter / Add, tap Scan for the camera, or scan with a connected Bluetooth / Wi-Fi / USB scanner. Scans go only to the selected item and are listed under it.</p>}
-          </section>
-
           {showCost && items.length > 0 && (() => {
             // Payment is done once for the whole outward and saved on every item, so it is shown once.
             const pay = items.find((i) => i.paymentStatus && (i.utrNumber || i.hasProof || i.approvedBy)) || items[0];
@@ -488,8 +427,6 @@ export default function OutwardDispatch() {
               </section>
             );
           })()}
-
-          {serial.camera}
 
           <OutwardDocuments
             outwardId={id}

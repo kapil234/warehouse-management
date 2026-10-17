@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown, Paperclip, Plus, Trash2, Loader2, X } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast } from "../components/CenterMessage";
+import apiClient from "../services/apiClient";
 import {
   createOutward,
   updateOutward,
@@ -218,6 +219,18 @@ export default function OutwardForm() {
     : companyWarehouses.find((w) => w.id === pickedWarehouseId) || null;
   const warehouseId = selectedWarehouse?.id || "";
 
+  // Every customer added in this warehouse (by anyone) shows in the Customer Name dropdown.
+  const [sharedCustomers, setSharedCustomers] = useState([]);
+  useEffect(() => {
+    if (!warehouseId) { setSharedCustomers([]); return undefined; }
+    let cancelled = false;
+    apiClient
+      .get("/api/outward/customers", { params: { warehouseId } })
+      .then(({ data }) => { if (!cancelled) setSharedCustomers((data?.data || []).map((c) => c.name).filter(Boolean)); })
+      .catch(() => { if (!cancelled) setSharedCustomers([]); });
+    return () => { cancelled = true; };
+  }, [warehouseId]);
+
   // New entry: a proof was saved under the previously selected warehouse's folder, so drop it
   // when the warehouse changes and let the user attach it again.
   useEffect(() => {
@@ -254,7 +267,7 @@ export default function OutwardForm() {
         setPickedWarehouseId(x.warehouse.id);
       }
       setOutwardDateTime(getDateTimeLocal(x.refDocDate || x.createdAt));
-      setOutwardType(x.outwardType || "Sale - Stock Out");
+      setOutwardType(/^return/i.test(x.outwardType || "") ? "Replacement" : x.outwardType || "Sale - Stock Out");
       setCustomerName(x.customerName || "");
       setPiNumber(x.piNumber || "");
       setPiDate(x.piDate ? String(x.piDate).slice(0, 10) : "");
@@ -461,7 +474,6 @@ export default function OutwardForm() {
     if (piAmount !== "" && (!Number.isFinite(Number(piAmount)) || Number(piAmount) < 0)) return toast.error("Please enter a valid PI amount.");
 
     if (!shipToContactPerson.trim()) return toast.error("Please enter Ship to contact person.");
-    if (!shipToLocation.trim()) return toast.error("Please enter Ship to location.");
     if (!billToContactPerson.trim()) return toast.error("Please enter Bill to contact person.");
     if (!shipToContactNo.trim()) return toast.error("Please enter Ship to contact no.");
     if (!billToContactNo.trim()) return toast.error("Please enter Bill to contact no.");
@@ -682,14 +694,14 @@ export default function OutwardForm() {
                 <label className={labelCls}>Outward type</label>
                 <div className="relative">
                   <select value={outwardType} onChange={(e) => setOutwardType(e.target.value)} className={`${inputCls} appearance-none`}>
-                    <option>Sale - Stock Out</option><option>Service - Stock Out</option><option>Return to Vendor</option><option>Damage / Scrap Out</option>
+                    <option>Sale - Stock Out</option><option>Service - Stock Out</option><option>Replacement</option><option>Damage / Scrap Out</option>
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 </div>
               </div>
             </div>
             <div className="mt-4">
-              <PartyNameField value={customerName} onChange={setCustomerName} storageKey="outward-customer-names" label="Customer Name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer name" addLabel="+ Add new customer" />
+              <PartyNameField value={customerName} onChange={setCustomerName} sharedOptions={sharedCustomers} storageKey="outward-customer-names" label="Customer Name" labelCls={labelCls} inputCls={inputCls} placeholder="Enter customer name" addLabel="+ Add new customer" />
             </div>
 
             {/* PI row: PI No., PI date, PI amount, PI upload */}
@@ -728,7 +740,7 @@ export default function OutwardForm() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
               <div><label className={labelCls}>Contact person <span className="text-red-500">*</span></label><input required value={shipToContactPerson} onChange={(e) => setShipToContactPerson(e.target.value)} placeholder="Enter contact person" className={inputCls} /></div>
               <div><label className={labelCls}>Contact no. <span className="text-red-500">*</span></label><input required type="tel" inputMode="numeric" maxLength={10} value={shipToContactNo} onChange={(e) => setShipToContactNo(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter contact number" className={inputCls} /></div>
-              <div><label className={labelCls}>Location <span className="text-red-500">*</span></label><input required value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location or paste Google Maps link" className={inputCls} /><LocationLink value={shipToLocation} short /></div>
+              <div><label className={labelCls}>Location</label><input value={shipToLocation} onChange={(e) => setShipToLocation(e.target.value)} placeholder="Enter location or paste Google Maps link" className={inputCls} /><LocationLink value={shipToLocation} short /></div>
             </div>
 
             {/* Bill to details */}

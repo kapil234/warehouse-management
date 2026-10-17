@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 
 /**
@@ -44,8 +44,17 @@ export default function PartyNameField({
   label = "Supplier / Customer name",
   labelCls = "block text-sm font-semibold text-black mb-1.5",
   placeholder = "Select or type a name",
+  // Names shared from the server (e.g. every customer added in this warehouse), shown to everyone.
+  sharedOptions = [],
 }) {
-  const [options, setOptions] = useState(() => readStoredOptions(storageKey, defaultOptions));
+  const [localOptions, setOptions] = useState(() => readStoredOptions(storageKey, defaultOptions));
+  const options = useMemo(() => {
+    const merged = [...localOptions];
+    sharedOptions.forEach((name) => {
+      if (name && !merged.some((m) => m.toLowerCase() === String(name).toLowerCase())) merged.push(name);
+    });
+    return merged.sort((a, b) => a.localeCompare(b));
+  }, [localOptions, sharedOptions]);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
@@ -87,7 +96,7 @@ export default function PartyNameField({
   const addTyped = () => {
     if (!typed) return;
     if (!exactMatch) {
-      const next = [...options, typed];
+      const next = [...localOptions, typed];
       setOptions(next);
       persist(next);
     }

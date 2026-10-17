@@ -6,7 +6,8 @@ import { storeOutwardFiles } from "./documentController.js";
 import { outwardFolder } from "../utils/outwardWorkflow.js";
 import { findUnknownProducts, unknownProductsMessage } from "../utils/productCatalog.js";
 import { getWarehouseStock, findShortages, shortageMessage } from "../utils/stock.js";
-import { cleanSerials, validateSerials, findSerialConflict, replaceSerials, pruneSerials } from "../utils/serials.js";
+import { cleanSerials, validateSerials, replaceSerials, pruneSerials } from "../utils/serials.js";
+import { findSerialSourceProblem, listAvailableSerials } from "../utils/serialSources.js";
 import {
   STATUS,
   SALES_EDITABLE_STATUSES,
@@ -194,8 +195,7 @@ function finishFor(req, entry, allDocs) {
   if (isFinanceSide(req.user.role)) docsVisible = isDispatchedStatus(entry.status);
   else if (req.user.role === "SUPER_ADMIN") docsVisible = isApprovedStatus(entry.status) || isDispatchedStatus(entry.status);
   let docs = docsVisible ? allDocs : [];
-  // Warehouse manager: Account's documents appear only once released (every document except the Invoice), and the
-  // Invoice (document and reference) is never shared with them.
+  // Warehouse manager: sees every document and reference Account has added, the Invoice included.
   if (req.user.role === "WAREHOUSE_MANAGER") {
     docs = documentsForWarehouse(allDocs);
     if (Array.isArray(shaped.referenceDocuments)) shaped.referenceDocuments = referencesForWarehouse(shaped.referenceDocuments);
@@ -207,7 +207,7 @@ function finishFor(req, entry, allDocs) {
   const lockReason = req.user.role === "WAREHOUSE_MANAGER" ? null : editLockReason(entry, allDocs, entry.referenceDocuments || []);
   // Transportation details are frozen once Account has uploaded its documents - for every role (the manager too).
   const transportLocked = Boolean(transportLockReason(entry, allDocs, entry.referenceDocuments || []));
-  // Status update for Account / Sales / admin: Account has created the invoice (the manager is never told).
+  // Status update for Account / Sales / admin: Account has created the invoice.
   const invoiceCreated = req.user.role === "WAREHOUSE_MANAGER" ? undefined : hasInvoice(allDocs, entry.referenceDocuments || []);
   return { ...shaped, workflowStatus, stage, invoiceCreated, editLocked: Boolean(lockReason), editLockReason: lockReason, transportLocked, ...documentStatus(docs), documents: docs };
 }
@@ -237,7 +237,8 @@ export async function listOutward(req, res) {
           { items: { some: { category: { contains: search, mode: "insensitive" } } } },
           { serials: { some: { serialNo: { contains: search, mode: "insensitive" } } } },
         ] } : {},
-        type ? { outwardType: type } : {},
+        // "Return to Vendor" was renamed "Replacement": the Replacement filter also finds entries saved under the old name.
+        type ? (type === "Replacement" ? { outwardType: { in: ["Replacement", "Return to Vendor"] } } : { outwardType: type }) : {},
         dateFrom || dateTo ? { createdAt: {
           ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
           ...(dateTo ? { lte: new Date(`${dateTo}T23:59:59.999`) } : {}),
@@ -402,6 +403,50 @@ export async function listOutwardCompanies(req, res) {
   }
 }
  
+// Every customer name used on an outward entry in this warehouse - shown in the Customer Name dropdown to everyone
+// who can create entries for it, so a customer added by one person is available to all.
+export async function listOutwardCustomers(req, res) {
+  try {
+    const { warehouseId } = req.query;
+    await assertWarehouseAccess(req, warehouseId, null);
+    const rows = await prisma.min.findMany({
+      where: { warehouseId, customerName: { not: null } },
+      select: { customerName: true },
+      distinct: ["customerName"],
+      orderBy: { customerName: "asc" },
+    });
+    const seen = new Set();
+    const data = [];
+    for (const row of rows) {
+      const name = String(row.customerName || "").trim();
+      const key = name.toLowerCase();
+      if (name && !seen.has(key)) {
+        seen.add(key);
+        data.push({ name });
+      }
+    }
+    return res.json({ data });
+  } catch (error) {
+    console.error("List outward customers error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to fetch customers" });
+  }
+}
+
+// Serial numbers in stock that can be scanned for this outward entry (feeds the SR. No dropdown on the transportation form).
+export async function getAvailableSerials(req, res) {
+  try {
+    const { id } = req.params;
+    const entry = await prisma.min.findUnique({ where: { id }, select: { warehouseId: true, outwardType: true, items: true } });
+    if (!entry) return res.status(404).json({ message: "Outward entry not found" });
+    await assertWarehouseAccess(req, entry.warehouseId, "canOutward");
+    const data = await listAvailableSerials(prisma, { warehouseId: entry.warehouseId, outwardType: entry.outwardType, minId: id, items: entry.items });
+    return res.json({ data });
+  } catch (error) {
+    console.error("Available serials error:", error);
+    return res.status(error.status || 500).json({ message: error.message || "Failed to fetch available serial numbers" });
+  }
+}
+
 export async function createOutwardCompany(req, res) {
   try {
     const { warehouseId, name } = req.body;
@@ -1038,16 +1083,7 @@ export async function dispatchOutward(req, res) {
       return res.status(422).json({ message: "Invoice and e-way bill documents are added by the account team" });
     }
 
-    // Serial numbers: one for every Pcs unit. Entries dispatched before this feature (no serials saved yet)
-    // may be updated without them, but if serials are sent they must be complete.
-    const serials = cleanSerials(data.serials);
-    const legacyDispatched = isDispatchedStatus(existing.status) && existing._count.serials === 0 && serials.length === 0;
-    if (!legacyDispatched) {
-      const serialProblem = validateSerials(existing.items, serials);
-      if (serialProblem) return res.status(422).json({ message: serialProblem });
-      const serialConflict = await findSerialConflict(prisma, id, serials);
-      if (serialConflict) return res.status(422).json({ message: serialConflict });
-    }
+    // Serial numbers are scanned on the transportation form (see saveTransportation); dispatch leaves them as they are.
 
     const newSnapshot = {
       refDocType: normalizedRefs[0].refDocType,
@@ -1086,12 +1122,6 @@ export async function dispatchOutward(req, res) {
         });
         if (!count) throw httpError(409, "This entry is not ready for dispatch");
         await tx.min.update({ where: { id }, data: { referenceDocuments: { deleteMany: { NOT: { refDocType: { in: ACCOUNT_REF_TYPES } } }, create: normalizedRefs } } });
-        if (!legacyDispatched) {
-          // Re-check inside the transaction so two dispatches cannot take the same serial number.
-          const clash = await findSerialConflict(tx, id, serials);
-          if (clash) throw httpError(422, clash);
-          await replaceSerials(tx, id, serials);
-        }
 
         if (uploaded.length) {
           // A new file for a document that already exists replaces it.
@@ -1120,11 +1150,6 @@ export async function dispatchOutward(req, res) {
     const entries = firstDispatch
       ? [{ ...base, action: "DISPATCHED", description: `Dispatched (${dispatchMode}${newSnapshot.vehicleNumber ? `, ${newSnapshot.vehicleNumber}` : ""})` }]
       : changes.map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
-    if (!legacyDispatched && serials.length) {
-      const via = { CAMERA: 0, SCANNER: 0, MANUAL: 0 };
-      serials.forEach((x) => { via[x.source] += 1; });
-      entries.push({ ...base, action: "SERIALS_UPDATED", description: `Serial numbers saved: ${serials.length} (camera ${via.CAMERA}, scanner ${via.SCANNER}, typed ${via.MANUAL})`, changes: { count: serials.length } });
-    }
     for (const u of uploaded) {
       entries.push({ ...base, action: "DOCUMENT_ADDED", description: `Document added: ${u.docCategory} (${u.fileName})`, changes: { docCategory: u.docCategory, fileName: u.fileName } });
     }
@@ -1156,6 +1181,9 @@ export async function saveTransportation(req, res) {
       select: {
         id: true, warehouseId: true, outwardNumber: true, status: true, transportSubmittedAt: true,
         transportMode: true, dispatchMode: true, vehicleNumber: true, driverName: true, driverContact: true, transporterId: true, transporterName: true, transporterContact: true,
+        items: true,
+        outwardType: true,
+        _count: { select: { serials: true } },
       },
     });
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
@@ -1179,14 +1207,34 @@ export async function saveTransportation(req, res) {
     const columns = toTransportColumns(data);
     const isFirstTime = !existing.transportSubmittedAt;
 
-    const { count } = await prisma.min.updateMany({
-      where: { id, status: { in: allowed } },
-      data: {
-        ...columns,
-        ...(isFirstTime ? { transportSubmittedById: req.user.id, transportSubmittedByName: req.user.name, transportSubmittedAt: new Date() } : {}),
-      },
+    // Serial numbers: one for every Pcs unit, scanned on this form and shared with the account team.
+    // Entries whose transportation form was submitted before this feature (no serials saved) can still be corrected without them.
+    const serials = cleanSerials(data.serials);
+    const legacyNoSerials = !isFirstTime && existing._count.serials === 0 && serials.length === 0;
+    if (!legacyNoSerials) {
+      const serialProblem = validateSerials(existing.items, serials);
+      if (serialProblem) return res.status(422).json({ message: serialProblem });
+      // Each serial must have come in through an inward type allowed for this outward type, and not be out already.
+      const serialSourceProblem = await findSerialSourceProblem(prisma, { warehouseId: existing.warehouseId, outwardType: existing.outwardType, minId: id, serials });
+      if (serialSourceProblem) return res.status(422).json({ message: serialSourceProblem });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.min.updateMany({
+        where: { id, status: { in: allowed } },
+        data: {
+          ...columns,
+          ...(isFirstTime ? { transportSubmittedById: req.user.id, transportSubmittedByName: req.user.name, transportSubmittedAt: new Date() } : {}),
+        },
+      });
+      if (!count) throw httpError(409, "This entry was just updated by someone else");
+      if (!legacyNoSerials) {
+        // Re-check inside the transaction so two entries cannot take the same serial number.
+        const clash = await findSerialSourceProblem(tx, { warehouseId: existing.warehouseId, outwardType: existing.outwardType, minId: id, serials });
+        if (clash) throw httpError(422, clash);
+        await replaceSerials(tx, id, serials);
+      }
     });
-    if (!count) return res.status(409).json({ message: "This entry was just updated by someone else" });
     // TRANSPORT_PENDING -> DOCS_PENDING (or READY_FOR_DISPATCH when the release document is already there).
     if (isFirstTime) await syncApprovedStage(prisma, id);
 
@@ -1198,14 +1246,19 @@ export async function saveTransportation(req, res) {
       ? [{ ...base, action: "TRANSPORT_SUBMITTED", description: `Transportation details submitted: ${describe({ ...columns, mode: columns.transportMode })}` }]
       : diffFields(existing, columns, ["transportMode", "dispatchMode", "vehicleNumber", "driverName", "driverContact", "transporterId", "transporterName", "transporterContact"])
           .map((c) => ({ ...base, action: "UPDATED", description: `${c.label} updated from "${c.oldValue || "—"}" to "${c.newValue || "—"}"`, changes: c }));
+    if (!legacyNoSerials && serials.length) {
+      const via = { CAMERA: 0, SCANNER: 0, MANUAL: 0 };
+      serials.forEach((x) => { via[x.source] += 1; });
+      entries.push({ ...base, action: "SERIALS_UPDATED", description: `Serial numbers saved: ${serials.length} (camera ${via.CAMERA}, scanner ${via.SCANNER}, typed ${via.MANUAL})`, changes: { count: serials.length } });
+    }
     if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (transportation) failed:", err));
 
     const [result, documents] = await Promise.all([
-      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
+      prisma.min.findUnique({ where: { id }, include: { items: true, serials: { orderBy: { createdAt: "asc" } }, referenceDocuments: true } }),
       prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
     ]);
     return res.json({
-      message: isFirstTime ? "Transportation details submitted. The account team can now upload the documents." : "Transportation details updated",
+      message: isFirstTime ? "Transportation details and serial numbers submitted. The account team can now upload the documents." : "Transportation details updated",
       data: finishFor(req, result, documents),
     });
   } catch (error) {
@@ -1393,7 +1446,7 @@ export async function saveAccountDocuments(req, res) {
     if (blocked) return res.status(409).json({ message: blocked });
     for (const r of refs) if (r.vehicleNumber === "__TRANSPORT__") r.vehicleNumber = existing.vehicleNumber || null;
 
-    // Once any document other than the Invoice is there, the entry is shared with the warehouse manager.
+    // Once any document is there, the entry is shared with the warehouse manager.
     // Above Rs. 1,00,000 the e-way bill document must be there first.
     const savedDocs = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: id }, select: { docCategory: true } });
     const lowerCat = (v) => String(v || "").trim().toLowerCase();

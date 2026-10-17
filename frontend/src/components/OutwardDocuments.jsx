@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Download, Trash2, Upload, FileText, Loader2, Plus, RefreshCw } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { toast, promptName } from "./CenterMessage";
 import {
   uploadOutwardDocument,
   downloadOutwardDocument,
@@ -128,12 +128,12 @@ export default function OutwardDocuments({
 
   // Add document menu: pick one of the three known types (to attach another
   // copy) or "Other" for a custom-named document.
-  const handleAddDocumentClick = (type) => {
+  const handleAddDocumentClick = async (type) => {
     setShowDocumentMenu(false);
 
     let label = type;
     if (type === "Other") {
-      const name = window.prompt("Enter document name");
+      const name = await promptName("Name this document", { label: "Document name", placeholder: "e.g. GST certificate" });
       if (!name?.trim()) return;
       label = `${otherPrefix}${name.trim()}`;
     }
@@ -244,7 +244,7 @@ export default function OutwardDocuments({
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
                   >
                     <FileText size={16} className="text-gray-400" />
-                    {type}
+                    {docLabel(type)}
                   </button>
                 ))}
               </div>
