@@ -190,6 +190,26 @@ export async function startScanner({ container, onDecoded }) {
   let timer = null;
   let candidate = { text: "", count: 0 };
 
+  // Barcode-scanner apps read the camera's FULL-resolution picture. A web video stream is only ~1080p, so, as an extra
+  // attempt, a full-resolution still (ImageCapture, Chrome / Android) is taken every ~1.5 s and decoded in the background.
+  let imageCapture = null;
+  try { if ("ImageCapture" in window && track) imageCapture = new window.ImageCapture(track); } catch { imageCapture = null; }
+  let stillBusy = false;
+  let stillErrors = 0;
+  let lastStillAt = 0;
+  const tryStill = () => {
+    if (!imageCapture || stillBusy || stillErrors >= 3 || performance.now() - lastStillAt < 1500) return;
+    stillBusy = true;
+    lastStillAt = performance.now();
+    imageCapture
+      .takePhoto({ fillLightMode: "off" })
+      .catch(() => imageCapture.takePhoto())
+      .then((blob) => decodeImageFile(blob, { allowWeak: false }))
+      .then((text) => { if (text && !stopped) onDecoded(text); })
+      .catch(() => { stillErrors += 1; })
+      .finally(() => { stillBusy = false; lastStillAt = performance.now(); });
+  };
+
   // A strong format (Code 128, QR ...) is accepted at once. A number-only retail format must be read the same
   // several times in a row, otherwise it is most likely a misread of a Code 128 label.
   const accept = (hit) => {
@@ -216,6 +236,7 @@ export async function startScanner({ container, onDecoded }) {
           hit = decodeView(video, w, h, view, { maxSide: 1280, hints: all ? HINTS_ALL : HINTS_STRONG, inverted: tick % 9 === 8 });
         }
         if (!stopped) accept(hit);
+        if (!hit && tick >= 6) tryStill();
         tick += 1;
       }
     } catch { /* a bad frame is skipped */ }
@@ -240,7 +261,7 @@ export async function startScanner({ container, onDecoded }) {
  * Decodes a barcode from a picture file (e.g. taken with the phone's own camera app, which has autofocus
  * and full resolution). Tries the native detector, then ZXing on several views and sizes. Returns text or null.
  */
-export async function decodeImageFile(file) {
+export async function decodeImageFile(file, { allowWeak = true } = {}) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -258,6 +279,7 @@ export async function decodeImageFile(file) {
       }
     }
     // nothing strong found: a number-only code is accepted from a photo (one sharp still picture is reliable)
+    if (!allowWeak) return null;
     if (native) return native.text;
     for (const view of VIEWS.slice(0, 3)) {
       const hit = decodeView(bitmap, width, height, view, { maxSide: 1600, hints: HINTS_ALL, inverted: true });
