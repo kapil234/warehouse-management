@@ -797,18 +797,6 @@ export async function createGrn(req, res) {
  
     const data = req.body;
  
-    console.log(
-      "Creating GRN with payload:"
-    );
- 
-    console.log(
-      JSON.stringify(
-        data,
-        null,
-        2
-      )
-    );
- 
     // =====================================================
     // BASIC DEFAULTS
     // =====================================================
@@ -874,15 +862,6 @@ export async function createGrn(req, res) {
     if (transactionWarehouse.company?.status === "Inactive" || transactionWarehouse.Inward !== "Active") {
       return res.status(403).json({ message: "Inward is disabled for this warehouse/company." });
     }
-    if (req.user.role === "WAREHOUSE_MANAGER") {
-      const access = await prisma.warehouseAccess.findUnique({
-        where: { userId_warehouseId: { userId: req.user.id, warehouseId: data.warehouseId } },
-      });
-      if (!access || access.accessLevel !== "MANAGE" || !access.canInward) {
-        return res.status(403).json({ message: "You don't have permission to create inward in this warehouse." });
-      }
-    }
- 
     if (!data.refDocNumber && !Array.isArray(data.otherDocumentNumbers)) {
       return res.status(422).json({ message: "At least one document number is required" });
     }
@@ -936,10 +915,21 @@ export async function createGrn(req, res) {
     // Every item must exist in the product master managed by the admin.
     // Product check and GRN count don't depend on each other, so run them together
     // (one round trip of waiting instead of two).
-    const [unknownItems, grnCount] = await Promise.all([
+    const [unknownItems, grnCount, managerAccess] = await Promise.all([
       findUnknownProducts(items),
       prisma.grn.count({ where: { warehouseId: data.warehouseId } }),
+      req.user.role === "WAREHOUSE_MANAGER"
+        ? prisma.warehouseAccess.findUnique({
+            where: { userId_warehouseId: { userId: req.user.id, warehouseId: data.warehouseId } },
+          })
+        : Promise.resolve(true),
     ]);
+    if (
+      req.user.role === "WAREHOUSE_MANAGER" &&
+      (!managerAccess || managerAccess.accessLevel !== "MANAGE" || !managerAccess.canInward)
+    ) {
+      return res.status(403).json({ message: "You don't have permission to create inward in this warehouse." });
+    }
     if (unknownItems.length) {
       return res.status(422).json({
         message: unknownProductsMessage(unknownItems),
@@ -1075,31 +1065,31 @@ export async function createGrn(req, res) {
     // AFTER COMMIT: read back + audit trail (in parallel)
     // =====================================================
  
-    const [fullGrn, createdDocuments] = await Promise.all([
-      prisma.grn.findUnique({
-        where: { id: createdGrn.id },
-        include: { items: true, serials: { orderBy: { createdAt: "asc" } }, referenceDocuments: true },
-      }),
-      documentRows.length
-        ? prisma.document.findMany({
-            where: { linkedType: "grn", linkedId: createdGrn.id },
-            orderBy: { uploadedAt: "desc" },
-          })
-        : Promise.resolve([]),
-      // recordAuditLog never throws - a failed audit write must not fail the GRN.
-      recordAuditLog(prisma, {
-        entityType: "INWARD",
-        entityId: createdGrn.id,
-        entityNumber: createdGrn.grnNumber,
-        action: "CREATED",
-        description: `Inward entry ${createdGrn.grnNumber} created with ${itemRows.length} item${itemRows.length === 1 ? "" : "s"}${serials.length ? ` and ${serials.length} serial number${serials.length === 1 ? "" : "s"}` : ""}`,
-        userId: req.user.id,
-        warehouseId: createdGrn.warehouseId,
-      }),
-    ]);
- 
-    const result = { ...fullGrn, documents: createdDocuments };
- 
+    // The saved data is already in memory, so there is no need to read it back.
+    // The audit entry is written AFTER the response is sent (it never throws),
+    // so the user doesn't wait for it.
+    const auditEntry = {
+      entityType: "INWARD",
+      entityId: createdGrn.id,
+      entityNumber: createdGrn.grnNumber,
+      action: "CREATED",
+      description: `Inward entry ${createdGrn.grnNumber} created with ${itemRows.length} item${itemRows.length === 1 ? "" : "s"}${serials.length ? ` and ${serials.length} serial number${serials.length === 1 ? "" : "s"}` : ""}`,
+      userId: req.user.id,
+      warehouseId: createdGrn.warehouseId,
+    };
+    res.once("finish", () => { recordAuditLog(prisma, auditEntry); });
+
+    const result = {
+      id: createdGrn.id,
+      grnNumber: createdGrn.grnNumber,
+      warehouseId: createdGrn.warehouseId,
+      inwardType: data.inwardType,
+      supplierName: data.supplierName,
+      companyName: data.companyName || null,
+      items: itemRows,
+      documents: documentRows.map((doc) => ({ docCategory: doc.docCategory || "Other", fileKey: doc.fileKey })),
+    };
+
     // =====================================================
     // CALCULATE DOCUMENT STATUS
     // =====================================================

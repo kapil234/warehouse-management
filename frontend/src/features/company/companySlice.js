@@ -1,11 +1,16 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import apiClient from "../../services/apiClient";
+import { isAnyOf } from "@reduxjs/toolkit";
+import {
+  initialCache, makeFetchGuard, markPending, markLoaded, markFailed, bumpVersion, sessionChanged,
+} from "../shared/fetchGuard";
 
 // =====================================================
 // Initial State
 // =====================================================
 
 const initialState = {
+  ...initialCache,
   // All companies
   list: [],
 
@@ -54,7 +59,8 @@ export const fetchCompanies = createAsyncThunk(
         err.response?.data?.message || "Failed to fetch companies"
       );
     }
-  }
+  },
+  { condition: makeFetchGuard("company", (s) => s.status === "loading") }
 );
 
 // =====================================================
@@ -153,12 +159,14 @@ const companySlice = createSlice({
       // FETCH ALL
       // =================================================
 
-      .addCase(fetchCompanies.pending, (state) => {
+      .addCase(fetchCompanies.pending, (state, action) => {
+        markPending(state, action.meta.arg);
         state.status = "loading";
         state.error = null;
       })
 
       .addCase(fetchCompanies.fulfilled, (state, action) => {
+        markLoaded(state);
         state.status = "succeeded";
 
         // Support either a bare array or { data: [...] } response shapes,
@@ -175,6 +183,7 @@ const companySlice = createSlice({
       })
 
       .addCase(fetchCompanies.rejected, (state, action) => {
+        markFailed(state);
         state.status = "failed";
         state.error = action.payload || "Failed to fetch companies";
       })
@@ -245,7 +254,11 @@ const companySlice = createSlice({
 
       .addCase(deleteCompany.rejected, (state, action) => {
         state.error = action.payload || "Failed to delete company";
-      });
+      })
+      .addMatcher(
+        isAnyOf(createCompany.fulfilled, updateCompany.fulfilled, deleteCompany.fulfilled, sessionChanged),
+        (state) => { bumpVersion(state); }
+      );
   },
 });
 

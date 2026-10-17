@@ -1,5 +1,9 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import apiClient from "../../services/apiClient";
+import { isAnyOf } from "@reduxjs/toolkit";
+import {
+  initialCache, makeFetchGuard, markPending, markLoaded, markFailed, bumpVersion, sessionChanged,
+} from "../shared/fetchGuard";
 
 const API_URL = "/api/warehouses";
 
@@ -16,7 +20,8 @@ export const fetchWarehouses = createAsyncThunk(
         error.response?.data?.message || "Failed to fetch warehouses"
       );
     }
-  }
+  },
+  { condition: makeFetchGuard("warehouse", (s) => s.loading) }
 );
 
 export const fetchWarehouseById = createAsyncThunk(
@@ -168,6 +173,7 @@ const getStoredSelectedWarehouse = () => {
 };
 
 const initialState = {
+  ...initialCache,
   list: [],
   selectedWarehouse: getStoredSelectedWarehouse(),
   loading: false,
@@ -204,11 +210,13 @@ const warehouseSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchWarehouses.pending, (state) => {
+      .addCase(fetchWarehouses.pending, (state, action) => {
+        markPending(state, action.meta.arg);
         state.loading = true;
         state.error = null;
       })
       .addCase(fetchWarehouses.fulfilled, (state, action) => {
+        markLoaded(state);
         state.loading = false;
         state.list = action.payload;
         const stored = state.selectedWarehouse;
@@ -224,6 +232,7 @@ const warehouseSlice = createSlice({
         }
       })
       .addCase(fetchWarehouses.rejected, (state, action) => {
+        markFailed(state);
         state.loading = false;
         state.error = action.payload;
       })
@@ -290,7 +299,14 @@ const warehouseSlice = createSlice({
       })
       .addCase(revokeWarehouseAccess.rejected, (state, action) => {
         state.error = action.payload;
-      });
+      })
+      .addMatcher(
+        isAnyOf(
+          createWarehouse.fulfilled, updateWarehouse.fulfilled, toggleInwardStatus.fulfilled, toggleOutwardStatus.fulfilled,
+          deleteWarehouse.fulfilled, grantWarehouseAccess.fulfilled, revokeWarehouseAccess.fulfilled, sessionChanged
+        ),
+        (state) => { bumpVersion(state); }
+      );
   },
 });
 

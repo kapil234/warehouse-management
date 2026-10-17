@@ -514,7 +514,7 @@ export default function Outward() {
             <p className="text-sm font-medium text-red-600">{listError}</p>
             <button
               type="button"
-              onClick={() => dispatch(fetchOutwardList(queryParams))}
+              onClick={() => dispatch(fetchOutwardList({ ...queryParams, force: true }))}
               className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
             >
               Try again

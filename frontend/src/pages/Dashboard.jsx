@@ -201,8 +201,15 @@ export default function Dashboard() {
   // ===================================================
 
   const canInward = useMemo(() => {
-    // Non warehouse-manager users
-    // keep their normal access.
+    // Sales and Account can only view inward - never create it.
+    if (
+      user?.role === "SALES" ||
+      user?.role === "ACCOUNT"
+    ) {
+      return false;
+    }
+
+    // Super admin keeps normal access.
     if (
       user?.role !==
       "WAREHOUSE_MANAGER"

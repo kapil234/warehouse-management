@@ -65,8 +65,13 @@ export default function AppLayout() {
     return () => clearTimeout(id);
   }, []);
 
+  // Back from any main page (Inward, Outward, Reports...) should land on the
+  // Dashboard. So opening a page FROM the dashboard adds a history entry, but
+  // switching between pages from the sidebar replaces the current one - the
+  // entry just below it stays the dashboard.
   const handleNavigate = (key) => {
-    navigate(`/${key}`);
+    if (`/${key}` === location.pathname) return;
+    navigate(`/${key}`, { replace: active !== "dashboard" });
   };
 
   return (

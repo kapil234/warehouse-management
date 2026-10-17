@@ -646,11 +646,15 @@ export default function InwardForm() {
     }
 
     const selectedDocuments = documents.filter((doc) => doc.file && !doc.existing && (doc.type !== "Other" || doc.name.trim()));
+    const savedMessage = isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`;
 
     if (selectedDocuments.length > 0) {
-      const categoryCounts = {};
+      // Go to the list straight away and upload the documents in the background,
+      // so the user isn't stuck on the form while files upload.
+      toast.success(`${savedMessage} Uploading ${selectedDocuments.length} document${selectedDocuments.length === 1 ? "" : "s"}...`);
 
-      const uploadResults = await Promise.all(
+      const categoryCounts = {};
+      Promise.all(
         selectedDocuments.map((doc) => {
           const label = doc.name?.trim() || doc.type;
           const key = label.toLowerCase();
@@ -664,30 +668,21 @@ export default function InwardForm() {
             })
           );
         })
-      );
-
-      const failedCount = uploadResults.filter((r) =>
-        uploadInwardDocument.rejected.match(r)
-      ).length;
-
-      if (failedCount > 0) {
-        toast.warning(
-          isEdit
-            ? `GRN ${grnNumber} updated. Some documents could not be uploaded.`
-            : `GRN ${grnNumber} created. Some documents could not be uploaded.`
-        );
-      } else {
-        toast.success(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
-      }
+      ).then((uploadResults) => {
+        const failedCount = uploadResults.filter((r) => uploadInwardDocument.rejected.match(r)).length;
+        if (failedCount > 0) {
+          toast.warning(`GRN ${grnNumber}: ${failedCount} document${failedCount === 1 ? "" : "s"} could not be uploaded. Open the GRN to upload again.`);
+        } else {
+          toast.success(`GRN ${grnNumber}: documents uploaded.`);
+        }
+      });
     } else {
-      toast.success(isEdit ? `GRN ${grnNumber} updated successfully.` : `GRN ${grnNumber} created successfully.`);
+      toast.success(savedMessage);
     }
 
     dispatch(resetCreateStatus());
     // replace (not push) so a successful save doesn't leave the edit
-    // form sitting in browser history - otherwise clicking Back from
-    // the detail page lands back on the form instead of the list/detail
-    // page the user actually came from.
+    // form sitting in browser history.
     navigate(isEdit ? `/inward/${editId}` : "/inward", { replace: true });
   };
 

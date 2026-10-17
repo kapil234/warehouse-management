@@ -1,11 +1,16 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import apiClient from "../../services/apiClient";
+import { isAnyOf } from "@reduxjs/toolkit";
+import {
+  initialCache, makeFetchGuard, markPending, markLoaded, markFailed, bumpVersion, sessionChanged,
+} from "../shared/fetchGuard";
 
 // -------------------------------------------------
 // Initial state
 // -------------------------------------------------
 
 const initialState = {
+  ...initialCache,
   // list page
   list: [],
   listStatus: "idle", // idle | loading | succeeded | failed
@@ -78,7 +83,8 @@ export const fetchOutwardList = createAsyncThunk(
         err.response?.data?.message || "Failed to fetch outward entries"
       );
     }
-  }
+  },
+  { condition: makeFetchGuard("outward", (s) => s.listStatus === "loading") }
 );
 
 export const fetchOutwardById = createAsyncThunk(
@@ -499,11 +505,13 @@ const outwardSlice = createSlice({
   extraReducers: (builder) => {
     builder
       // ---------------- list ----------------
-      .addCase(fetchOutwardList.pending, (state) => {
+      .addCase(fetchOutwardList.pending, (state, action) => {
+        markPending(state, action.meta.arg);
         state.listStatus = "loading";
         state.listError = null;
       })
       .addCase(fetchOutwardList.fulfilled, (state, action) => {
+        markLoaded(state);
         state.listStatus = "succeeded";
         state.list = action.payload.entries;
         if (action.payload.pagination) {
@@ -511,6 +519,7 @@ const outwardSlice = createSlice({
         }
       })
       .addCase(fetchOutwardList.rejected, (state, action) => {
+        markFailed(state);
         state.listStatus = "failed";
         state.listError = action.payload;
       })
@@ -692,7 +701,18 @@ const outwardSlice = createSlice({
       .addCase(fetchOutwardHistory.rejected, (state, action) => {
         state.historyStatus = "failed";
         state.historyError = action.payload;
-      });
+      })
+
+      // Anything saved / changed => the cached list is out of date.
+      .addMatcher(
+        isAnyOf(
+          createOutward.fulfilled, updateOutward.fulfilled, approveOutward.fulfilled, holdOutward.fulfilled,
+          rejectOutward.fulfilled, dispatchOutward.fulfilled, saveOutwardTransportation.fulfilled,
+          saveOutwardReceiving.fulfilled, saveAccountDocuments.fulfilled, deleteOutwardEntry.fulfilled,
+          uploadOutwardDocument.fulfilled, deleteOutwardDocument.fulfilled, sessionChanged
+        ),
+        (state) => { bumpVersion(state); }
+      );
   },
 });
 

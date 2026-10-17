@@ -594,10 +594,12 @@ export async function createOutward(req, res) {
       }
     }
 
-    await moveTempProofs(created.id, created.outwardNumber);
-
-    const [result] = await Promise.all([
-      prisma.min.findUnique({ where: { id: created.id }, include: { items: true, referenceDocuments: true } }),
+    // Moving proof files in storage and writing the audit entry happen AFTER the
+    // response is sent - the user no longer waits for them. (A file that fails to
+    // move simply stays where it is and still downloads fine.)
+    const result = await prisma.min.findUnique({ where: { id: created.id }, include: { items: true, referenceDocuments: true } });
+    res.once("finish", () => {
+      moveTempProofs(created.id, created.outwardNumber).catch((err) => console.error("Proof move failed:", err));
       recordAuditLog(prisma, {
         entityType: "OUTWARD",
         entityId: created.id,
@@ -606,8 +608,8 @@ export async function createOutward(req, res) {
         description: `Outward entry ${created.outwardNumber} created with ${itemRows.length} item${itemRows.length === 1 ? "" : "s"}`,
         userId: req.user.id,
         warehouseId: created.warehouseId,
-      }),
-    ]);
+      });
+    });
 
     return res.status(201).json({ message: "Outward entry submitted for account approval", data: finishFor(req, result, []) });
   } catch (error) {

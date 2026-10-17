@@ -737,7 +737,7 @@ export default function Inward() {
             <button
               type="button"
               onClick={() =>
-                dispatch(fetchInwardList(queryParams))
+                dispatch(fetchInwardList({ ...queryParams, force: true }))
               }
               className="mt-3 rounded-lg bg-[#185FA5] px-4 py-2 text-xs font-semibold text-white"
             >

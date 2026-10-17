@@ -1,11 +1,16 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import apiClient from "../../services/apiClient";
+import { isAnyOf } from "@reduxjs/toolkit";
+import {
+  initialCache, makeFetchGuard, markPending, markLoaded, markFailed, bumpVersion, sessionChanged,
+} from "../shared/fetchGuard";
 
 // -------------------------------------------------
 // Initial state
 // -------------------------------------------------
 
 const initialState = {
+  ...initialCache,
   // list page
   list: [],
   listStatus: "idle", // idle | loading | succeeded | failed
@@ -78,7 +83,8 @@ export const fetchInwardList = createAsyncThunk(
         err.response?.data?.message || "Failed to fetch inward entries"
       );
     }
-  }
+  },
+  { condition: makeFetchGuard("inward", (s) => s.listStatus === "loading") }
 );
 
 export const fetchInwardById = createAsyncThunk(
@@ -288,11 +294,13 @@ const inwardSlice = createSlice({
   extraReducers: (builder) => {
     builder
       // ---------------- list ----------------
-      .addCase(fetchInwardList.pending, (state) => {
+      .addCase(fetchInwardList.pending, (state, action) => {
+        markPending(state, action.meta.arg);
         state.listStatus = "loading";
         state.listError = null;
       })
       .addCase(fetchInwardList.fulfilled, (state, action) => {
+        markLoaded(state);
         state.listStatus = "succeeded";
         state.list = action.payload.grns;
         if (action.payload.pagination) {
@@ -300,6 +308,7 @@ const inwardSlice = createSlice({
         }
       })
       .addCase(fetchInwardList.rejected, (state, action) => {
+        markFailed(state);
         state.listStatus = "failed";
         state.listError = action.payload;
       })
@@ -440,7 +449,13 @@ const inwardSlice = createSlice({
       .addCase(fetchInwardHistory.rejected, (state, action) => {
         state.historyStatus = "failed";
         state.historyError = action.payload;
-      });
+      })
+
+      // Anything saved / changed => the cached list is out of date.
+      .addMatcher(
+        isAnyOf(createInward.fulfilled, updateInward.fulfilled, uploadInwardDocument.fulfilled, deleteInwardDocument.fulfilled, sessionChanged),
+        (state) => { bumpVersion(state); }
+      );
   },
 });
 
