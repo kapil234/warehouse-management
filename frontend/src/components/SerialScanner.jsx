@@ -121,6 +121,13 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     const target = startRow != null ? R[startRow] : null;
     const serialNo = resolveScannedSerial(raw, { sku: startRow != null ? I[startRow]?.sku : "", stock: target && S ? S[target.key] : null });
     if (!serialNo) return false;
+    // Dispatch: only serials that are really available (in this warehouse's stock for the item and not already dispatched
+    // in another outward entry) can be added. Anything else is refused right at the scan.
+    const stockForRow = target && S ? S[target.key] : null;
+    if (stockForRow && !stockForRow.some((sn) => cleanSerialInput(sn).toLowerCase() === serialNo.toLowerCase())) {
+      toast.warn(`${serialNo} cannot be added: it is already dispatched, or it is not in stock for this item.`);
+      return false;
+    }
     const exists = L.some((l) => (V[l.key] || []).some((s) => cleanSerialInput(s.serialNo).toLowerCase() === serialNo.toLowerCase()));
     if (exists) {
       toast.warn(`${serialNo} is already entered.`);

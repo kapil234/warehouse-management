@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Bell,
   MapPin,
   Package,
   LogOut,
@@ -57,7 +56,7 @@ function Navbar({ location = "Delhi Warehouse" }) {
     .toUpperCase();
 
   return (
-    <header className="h-14 md:h-16 bg-blue-700 flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+    <header className="h-14 md:h-16 bg-blue-700 flex items-center justify-between gap-3 px-3 sm:px-6 shrink-0" style={{ paddingTop: "env(safe-area-inset-top)" }}>
 
       {/* Logo */}
       <div className="flex shrink-0 items-center gap-2">
@@ -65,31 +64,31 @@ function Navbar({ location = "Delhi Warehouse" }) {
           <Package className="text-white" size={18} />
         </div>
 
-        <span className="text-white font-semibold text-base">
+        <span className="hidden min-[380px]:inline text-white font-semibold text-base tracking-tight">
           InvTrack
         </span>
       </div>
 
       {/* Right side */}
-      <div className="flex min-w-0 items-center gap-3 sm:gap-5">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2 sm:gap-5">
 
         {/* Warehouse switcher - warehouse managers only */}
         {canSwitchWarehouse && warehouses.length > 0 && (
-          <div className="relative flex min-w-0">
+          <div className="relative flex min-w-0 justify-end">
             <button
               type="button"
               onClick={() => warehouses.length > 1 && setWarehouseOpen((value) => !value)}
-              className="flex max-w-[150px] items-center gap-1.5 text-white/90 text-sm hover:text-white sm:max-w-none"
+              className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-[13px] font-medium leading-none text-white hover:bg-white/20 disabled:cursor-default disabled:hover:bg-white/10 sm:text-sm"
               aria-label="Switch warehouse"
               disabled={warehouses.length <= 1}
             >
-              <MapPin size={14} />
+              <MapPin size={14} className="shrink-0" />
               <span className="truncate">{selectedWarehouse?.name || location}</span>
-              {warehouses.length > 1 && <ChevronDown size={14} />}
+              {warehouses.length > 1 && <ChevronDown size={14} className="shrink-0" />}
             </button>
 
             {warehouseOpen && warehouses.length > 1 && (
-              <div className="absolute right-0 top-9 z-50 w-56 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+              <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
                 {warehouses.map((warehouse) => (
                   <button
                     key={warehouse.id}
@@ -113,18 +112,8 @@ function Navbar({ location = "Delhi Warehouse" }) {
           </div>
         )}
 
-        {/* Notification */}
-        <button
-          aria-label="Notifications"
-          className="text-white/90 hover:text-white relative"
-        >
-          <Bell size={20} />
-
-          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-400" />
-        </button>
-
         {/* User */}
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
 
           {/* Initials */}
           <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-blue-700 text-xs font-semibold">
@@ -148,7 +137,7 @@ function Navbar({ location = "Delhi Warehouse" }) {
         <button
           onClick={handleSignOut}
           aria-label="Sign out"
-          className="md:hidden text-white/90 hover:text-white"
+          className="md:hidden flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white/90 hover:bg-white/10 hover:text-white"
         >
           <LogOut size={20} />
         </button>
