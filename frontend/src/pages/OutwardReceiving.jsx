@@ -27,7 +27,7 @@ import OutwardDocuments from "../components/OutwardDocuments";
  * =========================================================
  * Opens right after "Save and mark as dispatched". The manager records when and who received the
  * goods (date from a calendar, receiver name, receiver contact, remarks) and uploads the receiving
- * documents (receiving copy is required, photo / other are optional).
+ * documents (all documents are optional).
  * "Fill later" skips the form; it can be opened again from the outward details page.
  * =========================================================
  */
@@ -40,9 +40,6 @@ const toDateInput = (value) => {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
-
-const startsWithName = (category, name) =>
-  String(category || "").trim().toLowerCase().startsWith(name.toLowerCase());
 
 export default function OutwardReceiving() {
   const navigate = useNavigate();
@@ -106,11 +103,6 @@ export default function OutwardReceiving() {
     if (!receiverName.trim()) return toast.error("Please enter the receiver name.");
     if (!receiverContact.trim()) return toast.error("Please enter the receiver contact number.");
     if (!PHONE_RE.test(receiverContact.trim())) return toast.error("Please enter a receiver contact number (10 digits).");
-
-    const hasCopy =
-      receivingDocs.some((d) => startsWithName(d.docCategory, RECEIVING_REQUIRED_DOCUMENT)) ||
-      stagedDocs.some((d) => startsWithName(d.docCategory, RECEIVING_REQUIRED_DOCUMENT));
-    if (!hasCopy) return toast.error(`Please upload the ${RECEIVING_REQUIRED_DOCUMENT.toLowerCase()}.`);
 
     setSaving(true);
     const result = await dispatch(
@@ -217,11 +209,13 @@ export default function OutwardReceiving() {
             deferred
             stagedFiles={stagedDocs}
             onStagedChange={setStagedDocs}
-            requiredDocuments={[RECEIVING_REQUIRED_DOCUMENT]}
+            requiredDocuments={[]}
+            optionalDocuments={[RECEIVING_REQUIRED_DOCUMENT]}
+            showSummary={false}
             addMenuTypes={RECEIVING_ADD_MENU}
             otherPrefix={RECEIVING_DOC_PREFIX}
             title="Receiving documents"
-            subtitle="Receiving copy is required. Receiving photo and other documents are optional."
+            subtitle="All receiving documents are optional. You can add them now or later."
           />
 
           <section className="rounded-2xl border border-gray-200 bg-white p-5 md:p-6">

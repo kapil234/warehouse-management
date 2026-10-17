@@ -10,6 +10,7 @@ import {
   selectOutwardUploadingDocs,
 } from "../features/outward/outwardSlice";
 import { REQUIRED_DOCUMENTS, docLabel } from "../features/outward/outwardHelpers";
+import { compressImage } from "../features/shared/compressImage";
 
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
 
@@ -51,6 +52,8 @@ export default function OutwardDocuments({
 
   const [showDocumentMenu, setShowDocumentMenu] = useState(false);
   const pendingCategoryRef = useRef(null);
+  const stagedRef = useRef(stagedFiles);
+  stagedRef.current = stagedFiles;
   const addDocInputRef = useRef(null);
 
   const validFile = (file, event) => {
@@ -68,10 +71,12 @@ export default function OutwardDocuments({
   };
 
   // Deferred mode: remember the file (replacing any earlier pick for the same row) instead of uploading it.
-  const stageFile = (docCategory, file) => {
+  // Photos are shrunk first, so the final save uploads a fraction of the data.
+  const stageFile = async (docCategory, file) => {
+    const small = await compressImage(file);
     const next = [
-      ...stagedFiles.filter((f) => !sameCategory(f.docCategory, docCategory)),
-      { id: crypto.randomUUID(), docCategory, file },
+      ...stagedRef.current.filter((f) => !sameCategory(f.docCategory, docCategory)),
+      { id: crypto.randomUUID(), docCategory, file: small },
     ];
     onStagedChange?.(next);
   };

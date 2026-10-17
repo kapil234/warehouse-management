@@ -38,7 +38,6 @@ import {
   validateDriver,
   validateReceiving,
   isReceivingDocCategory,
-  RECEIVING_REQUIRED_DOC,
   TRANSPORT_MODE_LABEL,
   validateTransport,
   toTransportColumns,
@@ -291,9 +290,11 @@ export async function getOutwardById(req, res) {
       },
     });
     if (!min) return res.status(404).json({ message: "Outward entry not found" });
-    await assertEntryVisible(req, min);
-
-    const documents = await prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, orderBy: { uploadedAt: "desc" } });
+    // Access check and documents are independent, so they run together.
+    const [, documents] = await Promise.all([
+      assertEntryVisible(req, min),
+      prisma.document.findMany({ where: { linkedType: "outward", linkedId: min.id }, orderBy: { uploadedAt: "desc" } }),
+    ]);
     return res.json({ data: finishFor(req, min, documents) });
   } catch (error) {
     console.error("Get outward error:", error);
@@ -1292,13 +1293,20 @@ export async function saveReceiving(req, res) {
       return res.status(422).json({ message: "Receiving documents must be named Receiving ..." });
     }
 
-    const existing = await prisma.min.findUnique({
-      where: { id },
-      select: {
-        id: true, warehouseId: true, outwardNumber: true, status: true, dispatchedAt: true, refDocDate: true,
-        receivedAt: true, receivedDate: true, receiverName: true, receiverContact: true, receivingRemarks: true,
-      },
-    });
+    // Entry and its saved documents are read together (they do not depend on each other).
+    const [existing, savedDocs] = await Promise.all([
+      prisma.min.findUnique({
+        where: { id },
+        select: {
+          id: true, warehouseId: true, outwardNumber: true, status: true, dispatchedAt: true, refDocDate: true,
+          receivedAt: true, receivedDate: true, receiverName: true, receiverContact: true, receivingRemarks: true,
+        },
+      }),
+      prisma.document.findMany({
+        where: { linkedType: "outward", linkedId: id },
+        select: { id: true, fileKey: true, docCategory: true },
+      }),
+    ]);
     if (!existing) return res.status(404).json({ message: "Outward entry not found" });
 
     await assertWarehouseAccess(req, existing.warehouseId, "canOutward");
@@ -1309,16 +1317,8 @@ export async function saveReceiving(req, res) {
     const problem = validateReceiving(data, existing.refDocDate || existing.dispatchedAt);
     if (problem) return res.status(422).json({ message: problem });
 
-    // A receiving copy is compulsory: either one is already saved, or one is sent with this request.
-    const savedDocs = await prisma.document.findMany({
-      where: { linkedType: "outward", linkedId: id },
-      select: { id: true, fileKey: true, docCategory: true },
-    });
+    // Receiving documents (copy / photo / other) are optional.
     const lower = (v) => String(v || "").trim().toLowerCase();
-    const hasCopy =
-      savedDocs.some((d) => lower(d.docCategory).startsWith(lower(RECEIVING_REQUIRED_DOC))) ||
-      categories.some((c) => lower(c).startsWith(lower(RECEIVING_REQUIRED_DOC)));
-    if (!hasCopy) return res.status(422).json({ message: `${RECEIVING_REQUIRED_DOC} (document) is required` });
 
     const snapshot = {
       receivedDate: new Date(data.receivedDate),
@@ -1381,11 +1381,8 @@ export async function saveReceiving(req, res) {
     }
     if (entries.length) recordAuditLogs(prisma, entries).catch((err) => console.error("Audit log (receiving) failed:", err));
 
-    const [result, documents] = await Promise.all([
-      prisma.min.findUnique({ where: { id }, include: { items: true, referenceDocuments: true } }),
-      prisma.document.findMany({ where: { linkedType: "outward", linkedId: id } }),
-    ]);
-    return res.json({ message: "Receiving details saved", data: finishFor(req, result, documents) });
+    // The screen goes straight back to the list, so there is no need to re-read and rebuild the whole entry.
+    return res.json({ message: "Receiving details saved", data: { id, workflowStatus: STATUS.DELIVERED } });
   } catch (error) {
     console.error("Save receiving error:", error);
     return res.status(error.status || 500).json({ message: error.message || "Failed to save receiving details" });

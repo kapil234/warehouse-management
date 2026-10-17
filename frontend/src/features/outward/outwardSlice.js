@@ -585,10 +585,10 @@ const outwardSlice = createSlice({
         if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
       })
 
-      // Receiving details saved: the response is the refreshed entry.
+      // Receiving details saved: the server only confirms (the screen returns to the list, which reloads).
       .addCase(saveOutwardReceiving.fulfilled, (state, action) => {
-        const entry = action.payload?.data;
-        if (entry && state.current && state.current.id === action.meta.arg.id) state.current = entry;
+        const status = action.payload?.data?.workflowStatus;
+        if (status && state.current && state.current.id === action.meta.arg.id) state.current.workflowStatus = status;
       })
 
       // Account saved its reference documents / files: the response is the refreshed entry.

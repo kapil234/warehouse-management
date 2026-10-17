@@ -64,7 +64,7 @@ function Navbar({ location = "Delhi Warehouse" }) {
           <Package className="text-white" size={18} />
         </div>
 
-        <span className="hidden min-[380px]:inline text-white font-semibold text-base tracking-tight">
+        <span className="text-white font-semibold text-base tracking-tight">
           InvTrack
         </span>
       </div>
