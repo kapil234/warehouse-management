@@ -11,7 +11,8 @@ export const isCableCategory = (category) => {
 export const needsSerials = (item) =>
   !isCableCategory(item?.category) && String(item?.uom || "").trim().toLowerCase() === SERIAL_UOM.toLowerCase();
 export const serialKey = (category, sku) => `${String(category || "").trim().toLowerCase()}||${String(sku || "").trim().toLowerCase()}`;
-export const cleanSerialInput = (value) => String(value ?? "").replace(/\s+/g, "");
+// Spaces and hidden control characters (a camera decoder can add FNC1 / GS characters to a Code 128 label) are removed.
+export const cleanSerialInput = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/\s+/g, "");
 
 /** [{ key, category, sku, quantity }] - one entry per category + SKU that needs serials. */
 export function buildSerialLines(items = []) {
@@ -105,7 +106,7 @@ export const sortSerials = (list = []) => [...list].sort(compareSerials);
  * A product label barcode often holds "MODEL SERIAL" (e.g. "SG33CX-P2-V124 I2690100041"), not just the serial.
  * Returns the serial no. to store:
  *   1) a serial that is in stock for this item (whole text, one of its words, or contained in the text), else
- *   2) the text without the item's own model/SKU in front of it, else
+ *   2) the text without the item's own model/SKU in front of it (only when a space separates them), else
  *   3) the text as scanned (spaces removed).
  */
 export function resolveScannedSerial(raw, { sku = "", stock = null } = {}) {
@@ -126,9 +127,11 @@ export function resolveScannedSerial(raw, { sku = "", stock = null } = {}) {
     if (inside) return byLower.get(inside);
   }
 
-  const skuClean = cleanSerialInput(sku).toLowerCase();
-  if (skuClean && lower.startsWith(skuClean) && lower.length > skuClean.length) {
-    const rest = cleaned.slice(skuClean.length).replace(/^[-_/:|,;]+/, "");
+  // "MODEL SERIAL" (model and serial separated by a space): keep only the serial.
+  // A joined code like "SG150CX-V122I2672907770" is itself the serial no. and is kept whole.
+  const skuTrim = String(sku ?? "").trim().toLowerCase();
+  if (skuTrim && text.toLowerCase().startsWith(skuTrim) && /^\s/.test(text.slice(skuTrim.length))) {
+    const rest = cleanSerialInput(text.slice(skuTrim.length));
     if (rest) return rest;
   }
   return cleaned;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, Minus, Plus, X, Zap, ZapOff } from "lucide-react";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import { Camera, CheckCircle2, ImagePlus, Minus, Plus, X, Zap, ZapOff } from "lucide-react";
+import { startScanner, decodeImageFile } from "../features/scanner/barcodeEngine";
 import { toast } from "./CenterMessage";
 import { cleanSerialInput, countFilled, serialKey, needsSerials, sortSerials, resolveScannedSerial } from "../features/outward/serialHelpers";
 
@@ -18,25 +18,6 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials, sortSerials, re
  *   serial.badge                 -> "Serial no. x / y" badge for the table heading
  *   serial.camera                -> camera pop-up, render once in the page
  */
-
-const READER_ID = "serial-camera-reader";
-
-// Product labels carry dense 1D barcodes (Code 128). Telling the reader which formats to look for makes it
-// faster and far more reliable than trying every format on every frame.
-const FORMATS = [
-  Html5QrcodeSupportedFormats.CODE_128,
-  Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.CODE_93,
-  Html5QrcodeSupportedFormats.CODABAR,
-  Html5QrcodeSupportedFormats.ITF,
-  Html5QrcodeSupportedFormats.EAN_13,
-  Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A,
-  Html5QrcodeSupportedFormats.UPC_E,
-  Html5QrcodeSupportedFormats.QR_CODE,
-  Html5QrcodeSupportedFormats.DATA_MATRIX,
-];
-const READER_OPTIONS = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, verbose: false };
 
 // No scan box: the WHOLE camera picture is read, so a barcode is picked up the moment it is in view (no aligning).
 
@@ -87,6 +68,8 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const [selected, setSelected] = useState(null);
   const selectRow = (i) => { activeRow.current = i; setSelected(i); };
   const trackRef = useRef(null);
+  const readerRef = useRef(null); // div the camera picture is put into
+  const photoInputRef = useRef(null);
 
   // Rows that need serials: where their serials sit inside the line's slots (rows with the same SKU share one line).
   const rows = useMemo(() => {
@@ -256,8 +239,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   useEffect(() => {
     if (!cameraOpen) return undefined;
     let cancelled = false;
-    let reader = null;
-    let running = false;
+    let engine = null;
 
     const onDecoded = (text) => {
       const now = Date.now();
@@ -267,9 +249,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     };
 
     // Picks up focus / zoom / torch of the running camera track.
-    const setupTrack = async () => {
-      const video = document.querySelector(`#${READER_ID} video`);
-      const track = video?.srcObject?.getVideoTracks?.()[0];
+    const setupTrack = async (track) => {
       if (!track) return;
       trackRef.current = track;
       const caps = track.getCapabilities?.() || {};
@@ -282,55 +262,37 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom: z, zoomValue: z ? z.min : 1 });
     };
 
-    const attempts = [
-      // 1) HD picture of the whole view: a dense barcode needs the detail
-      () => ({
-        camera: { facingMode: "environment" },
-        config: { fps: 15, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      }),
-      // 2) back camera with the device's default picture size
-      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, disableFlip: true } }),
-      // 3) any camera (some devices / laptops have no back camera)
-      () => ({ camera: { facingMode: "user" }, config: { fps: 15, disableFlip: true } }),
-    ];
-
-    const run = async () => {
-      let lastError = null;
-      for (const make of attempts) {
-        if (cancelled) return;
-        const { camera, config } = make();
-        try {
-          reader = new Html5Qrcode(READER_ID, READER_OPTIONS);
-          await reader.start(camera, config, onDecoded, () => {});
-          running = true;
-          if (cancelled) { await reader.stop().catch(() => {}); reader.clear?.(); return; }
-          await setupTrack();
-          return;
-        } catch (err) {
-          lastError = err;
-          try { await reader?.stop(); } catch { /* not running */ }
-          try { reader?.clear?.(); } catch { /* ignore */ }
-          reader = null;
-          // permission / secure-context problems will not be fixed by another attempt
-          if (/NotAllowed|Permission/i.test(err?.name || String(err))) break;
+    (async () => {
+      try {
+        engine = await startScanner({ container: readerRef.current, onDecoded });
+        if (cancelled) { engine.stop(); engine = null; return; }
+        await setupTrack(engine.track);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(cameraErrorMessage(err));
+          setCameraOpen(false);
         }
       }
-      if (!cancelled) {
-        toast.error(cameraErrorMessage(lastError));
-        setCameraOpen(false);
-      }
-    };
-    run();
+    })();
 
     return () => {
       cancelled = true;
       trackRef.current = null;
       setCamTools({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
-      if (reader && running) {
-        reader.stop().then(() => reader.clear?.()).catch(() => {});
-      }
+      engine?.stop();
     };
   }, [cameraOpen]);
+
+  // "Photo": take / pick a picture with the phone's own camera app (autofocus, full resolution) and read it.
+  const scanPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const text = await decodeImageFile(file);
+    if (!text) return toast.warn("No barcode found in the photo. Take it closer, flat, sharp and well lit, then try again.");
+    lastDecoded.current = { text, at: Date.now() };
+    if (addToSelectedRef.current(text, "CAMERA")) beep();
+  };
 
   const toggleTorch = async () => {
     const track = trackRef.current;
@@ -490,7 +452,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
         <div className="relative h-60 w-full overflow-hidden rounded-lg bg-black sm:h-64">
-          <div id={READER_ID} className="h-full w-full [&_video]:!h-full [&_video]:!w-full [&_video]:!object-cover [&>div]:!hidden" />
+          <div ref={readerRef} className="h-full w-full" />
           {/* Scan frame: put the barcode inside this rectangle */}
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="relative h-[46%] w-[90%] rounded-md shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
@@ -525,6 +487,10 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           </button>
         </div>
         <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
+        <input ref={photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={scanPhoto} />
+        <button type="button" onClick={() => photoInputRef.current?.click()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+          <ImagePlus size={16} />Can't scan? Take a photo of the barcode
+        </button>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>
