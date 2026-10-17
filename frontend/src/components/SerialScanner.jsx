@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ImagePlus, Minus, Plus, X, Zap, ZapOff } from "lucide-react";
-import { createFrameScratch, readImageFile, readVideoFrame } from "../features/outward/barcodeReader";
+import { Camera, CheckCircle2, Minus, Plus, X, Zap, ZapOff } from "lucide-react";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { toast } from "./CenterMessage";
 import { cleanSerialInput, countFilled, serialKey, needsSerials, sortSerials, resolveScannedSerial } from "../features/outward/serialHelpers";
 
@@ -18,6 +18,25 @@ import { cleanSerialInput, countFilled, serialKey, needsSerials, sortSerials, re
  *   serial.badge                 -> "Serial no. x / y" badge for the table heading
  *   serial.camera                -> camera pop-up, render once in the page
  */
+
+const READER_ID = "serial-camera-reader";
+
+// Product labels carry dense 1D barcodes (Code 128). Telling the reader which formats to look for makes it
+// faster and far more reliable than trying every format on every frame.
+const FORMATS = [
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.CODE_93,
+  Html5QrcodeSupportedFormats.CODABAR,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.QR_CODE,
+  Html5QrcodeSupportedFormats.DATA_MATRIX,
+];
+const READER_OPTIONS = { formatsToSupport: FORMATS, useBarCodeDetectorIfSupported: true, verbose: false };
 
 // No scan box: the WHOLE camera picture is read, so a barcode is picked up the moment it is in view (no aligning).
 
@@ -60,7 +79,6 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const [drafts, setDrafts] = useState({}); // rowIndex -> text in the input
   const [dropOpen, setDropOpen] = useState(null); // rowIndex whose "in stock" dropdown is open
   const [camTools, setCamTools] = useState({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
-  const [photoBusy, setPhotoBusy] = useState(false);
 
   const inputRefs = useRef({}); // rowIndex -> input element
   const keyStats = useRef({ start: 0, last: 0, count: 0 });
@@ -69,7 +87,6 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
   const [selected, setSelected] = useState(null);
   const selectRow = (i) => { activeRow.current = i; setSelected(i); };
   const trackRef = useRef(null);
-  const videoRef = useRef(null);
 
   // Rows that need serials: where their serials sit inside the line's slots (rows with the same SKU share one line).
   const rows = useMemo(() => {
@@ -228,13 +245,12 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines.length, disabled]);
 
-  // Camera (continuous): every picture from the camera is read with ZXing; each code is added; closes when everything is filled.
+  // Camera (continuous): each code is added; closes when everything is filled.
   useEffect(() => {
     if (!cameraOpen) return undefined;
     let cancelled = false;
-    let stream = null;
-    let timer = null;
-    const scratch = createFrameScratch();
+    let reader = null;
+    let running = false;
 
     const onDecoded = (text) => {
       const now = Date.now();
@@ -244,7 +260,10 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
     };
 
     // Picks up focus / zoom / torch of the running camera track.
-    const setupTrack = async (track) => {
+    const setupTrack = async () => {
+      const video = document.querySelector(`#${READER_ID} video`);
+      const track = video?.srcObject?.getVideoTracks?.()[0];
+      if (!track) return;
       trackRef.current = track;
       const caps = track.getCapabilities?.() || {};
       try {
@@ -253,74 +272,56 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       const z = caps.zoom && Number.isFinite(caps.zoom.max) && caps.zoom.max > caps.zoom.min
         ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 8), step: caps.zoom.step || 0.1 }
         : null;
-      let zoomValue = z ? z.min : 1;
-      if (z) {
-        const start = Math.min(Math.max(2, z.min), z.max);
-        try { await track.applyConstraints({ advanced: [{ zoom: start }] }); zoomValue = start; } catch { /* zoom is optional */ }
-      }
-      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom: z, zoomValue });
+      if (!cancelled) setCamTools({ torch: !!caps.torch, torchOn: false, zoom: z, zoomValue: z ? z.min : 1 });
     };
 
-    // Biggest picture first (a dense label needs the pixels), then step down.
     const attempts = [
-      { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 } },
-      { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      { facingMode: { ideal: "environment" } },
-      true, // any camera (laptops have no back camera)
+      // 1) HD picture of the whole view: a dense barcode needs the detail
+      () => ({
+        camera: { facingMode: "environment" },
+        config: { fps: 15, disableFlip: true, videoConstraints: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      }),
+      // 2) back camera with the device's default picture size
+      () => ({ camera: { facingMode: "environment" }, config: { fps: 15, disableFlip: true } }),
+      // 3) any camera (some devices / laptops have no back camera)
+      () => ({ camera: { facingMode: "user" }, config: { fps: 15, disableFlip: true } }),
     ];
 
-    const open = async () => {
+    const run = async () => {
       let lastError = null;
-      for (const video of attempts) {
-        if (cancelled) return null;
+      for (const make of attempts) {
+        if (cancelled) return;
+        const { camera, config } = make();
         try {
-          return await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          reader = new Html5Qrcode(READER_ID, READER_OPTIONS);
+          await reader.start(camera, config, onDecoded, () => {});
+          running = true;
+          if (cancelled) { await reader.stop().catch(() => {}); reader.clear?.(); return; }
+          await setupTrack();
+          return;
         } catch (err) {
           lastError = err;
-          if (/NotAllowed|Permission|Security/i.test(err?.name || String(err))) break; // another attempt will not help
+          try { await reader?.stop(); } catch { /* not running */ }
+          try { reader?.clear?.(); } catch { /* ignore */ }
+          reader = null;
+          // permission / secure-context problems will not be fixed by another attempt
+          if (/NotAllowed|Permission/i.test(err?.name || String(err))) break;
         }
       }
-      throw lastError || new Error("Camera could not be opened");
-    };
-
-    const loop = async () => {
-      if (cancelled) return;
-      const video = videoRef.current;
-      if (video && video.readyState >= 2) {
-        try {
-          const text = await readVideoFrame(video, scratch);
-          if (text && !cancelled) onDecoded(text);
-        } catch { /* a bad frame is skipped */ }
-      }
-      if (!cancelled) timer = setTimeout(loop, 80);
-    };
-
-    const run = async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error("no camera api");
-        stream = await open();
-        if (cancelled) { stream?.getTracks().forEach((t) => t.stop()); return; }
-        const video = videoRef.current;
-        video.srcObject = stream;
-        await video.play().catch(() => {});
-        await setupTrack(stream.getVideoTracks()[0]);
-        loop();
-      } catch (err) {
-        if (!cancelled) {
-          toast.error(cameraErrorMessage(err));
-          setCameraOpen(false);
-        }
+      if (!cancelled) {
+        toast.error(cameraErrorMessage(lastError));
+        setCameraOpen(false);
       }
     };
     run();
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
       trackRef.current = null;
       setCamTools({ torch: false, torchOn: false, zoom: null, zoomValue: 1 });
-      stream?.getTracks().forEach((t) => t.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
+      if (reader && running) {
+        reader.stop().then(() => reader.clear?.()).catch(() => {});
+      }
     };
   }, [cameraOpen]);
 
@@ -343,21 +344,6 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
       await track.applyConstraints({ advanced: [{ zoom: next }] });
       setCamTools((t) => ({ ...t, zoomValue: next }));
     } catch { /* zoom is optional */ }
-  };
-
-  // Scan a barcode from a picture: a photo, a screenshot or any image file from the device.
-  const scanImage = async (file) => {
-    if (!file) return;
-    setPhotoBusy(true);
-    try {
-      const text = await readImageFile(file);
-      if (!text) toast.warn("No barcode found in that image. Use a sharp picture where the barcode fills most of the image.");
-      else if (addToSelectedRef.current(text, "CAMERA")) beep();
-    } catch {
-      toast.warn("That image could not be read. Choose a JPG or PNG picture.");
-    } finally {
-      setPhotoBusy(false);
-    }
   };
 
   const selectedRowInfo = selected != null ? rows[selected] : null;
@@ -497,7 +483,7 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           <button type="button" onClick={() => setCameraOpen(false)} className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-50"><X size={16} /></button>
         </div>
         <div className="relative h-60 w-full overflow-hidden rounded-lg bg-black sm:h-64">
-          <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" />
+          <div id={READER_ID} className="h-full w-full [&_video]:!h-full [&_video]:!w-full [&_video]:!object-cover [&>div]:!hidden" />
           {/* Scan frame: put the barcode inside this rectangle */}
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="relative h-[46%] w-[90%] rounded-md shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
@@ -530,12 +516,8 @@ export default function useSerialScanner({ items = [], lines = [], values = {}, 
           <button type="button" onClick={toggleTorch} className={`flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-semibold ${camTools.torchOn ? "border-amber-300 bg-amber-50 text-amber-800" : "border-gray-300 bg-white text-gray-700"}`}>
             {camTools.torchOn ? <Zap size={16} /> : <ZapOff size={16} />}Flash {camTools.torchOn ? "ON" : "OFF"}
           </button>
-          <label className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-semibold text-gray-700 ${photoBusy ? "pointer-events-none opacity-60" : ""}`}>
-            <ImagePlus size={16} />{photoBusy ? "Reading image..." : "Scan from an image"}
-            <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; scanImage(f); }} />
-          </label>
         </div>
-        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Fill the frame with the barcode (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
+        <p className="mt-3 min-h-5 text-center text-sm font-medium text-green-700">{lastScan ? `Last scanned: ${lastScan}` : "Put the barcode inside the frame (use zoom if you have to stay back so it stays sharp). Keep it flat and well lit; switch Flash on if it is dark."}</p>
         <button type="button" onClick={() => setCameraOpen(false)} className="mt-3 w-full rounded-lg bg-gray-900 py-2.5 text-sm font-semibold text-white hover:bg-black">Done</button>
       </div>
     </div>
